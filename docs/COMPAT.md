@@ -71,10 +71,14 @@ as each fix lands with its test.
 ## Current limitations (M1)
 
 - Methods: `storing` and a single `lzma` stage. Chains (`rep+exe+lzma`,
-  `4x4+tor`, ...) are rejected with a clear error, not decoded incorrectly.
-- Commands: `l`, `t`, `x` (read side). Creation/update arrive in M2.
-- No selective extraction (file masks), no overwrite policy yet.
-- Files are read fully into memory; large-archive streaming comes with M2.
+  `4x4+tor`, ...) are rejected with a clear error, never decoded incorrectly.
+- Commands: `a`, `l`, `lb`, `t`, `x`. No update (`u`/`f`/`d`), no masks or
+  selective extraction, no overwrite policy.
+- Creation writes a single solid data block and stores the directory
+  uncompressed; splitting and `-dm` methods arrive with M2.
+- Reading is memory-mapped (a 4 GiB archive does not need 4 GiB of RAM), but
+  creation still reads each file into memory, so very large inputs are limited by
+  available RAM.
 
 ## What is NOT promised
 

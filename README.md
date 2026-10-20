@@ -4,11 +4,12 @@ Extended support for [FreeArc 0.67](https://sourceforge.net/projects/freearc/):
 a maintained version of the archiver with new platforms, updated libraries,
 bug fixes and a GTK3 GUI.
 
-**Status: M1 read side complete.** `arc-ex l`, `t` and `x` work on real archives
-created by `arc.exe` with `storing` or a single `lzma` stage, both for the
-directory and for the data; extraction is verified file by file against the
-stored CRCs. Method chains (`rep+4x4+tor`, ...) and archive creation are next.
-The milestone plan is in [`docs/PLAN.md`](docs/PLAN.md).
+**Status: M1 complete.** `arc-ex` already reads and writes real archives with
+`storing` or a single `lzma` stage: `a` (create), `l`, `lb`, `t` and `x`.
+Archives written by `arc-ex` are tested and extracted by `arc.exe` 0.67.1, and
+archives written by `arc.exe` are read back with per-file CRC verification.
+Method chains (`rep+4x4+tor`, ...), update and the GTK3 GUI are next; see
+[`docs/PLAN.md`](docs/PLAN.md).
 
 ## Targets
 

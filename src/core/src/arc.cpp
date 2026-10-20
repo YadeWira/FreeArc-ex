@@ -1,12 +1,12 @@
 #include "fa/arc.h"
 
 #include <cstring>
-#include <fstream>
 #include <string_view>
 
 #include "fa/crc32.h"
 #include "fa/decompress.h"
 #include "fa/format.h"
+#include "fa/mapped_file.h"
 #include "fa/vint.h"
 
 namespace fa {
@@ -63,37 +63,15 @@ private:
     std::size_t pos_ = 0;
 };
 
-bool load_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data,
-               std::string& error)
+bool parse_descriptor(const std::uint8_t* buf, std::size_t size, std::size_t pos,
+                      BlockRef& block)
 {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        error = "cannot open '" + path.string() + "'";
-        return false;
-    }
-    in.seekg(0, std::ios::end);
-    const std::streamoff size = in.tellg();
-    if (size < 0) {
-        error = "cannot determine size of '" + path.string() + "'";
-        return false;
-    }
-    in.seekg(0, std::ios::beg);
-    data.resize(static_cast<std::size_t>(size));
-    if (size > 0 && !in.read(reinterpret_cast<char*>(data.data()), size)) {
-        error = "cannot read '" + path.string() + "'";
-        return false;
-    }
-    return true;
-}
-
-bool parse_descriptor(const std::vector<std::uint8_t>& buf, std::size_t pos, BlockRef& block)
-{
-    if (buf.size() - pos < format::kSignature.size()) return false;
-    if (std::memcmp(buf.data() + pos, format::kSignature.data(), format::kSignature.size()) != 0) {
+    if (size - pos < format::kSignature.size()) return false;
+    if (std::memcmp(buf + pos, format::kSignature.data(), format::kSignature.size()) != 0) {
         return false;
     }
 
-    Cursor cur(buf.data() + pos, buf.size() - pos);
+    Cursor cur(buf + pos, size - pos);
     if (!cur.skip(format::kSignature.size())) return false;
 
     std::uint64_t type = 0;
@@ -109,7 +87,7 @@ bool parse_descriptor(const std::vector<std::uint8_t>& buf, std::size_t pos, Blo
     const std::size_t covered = cur.pos();
     std::uint32_t descr_crc = 0;
     if (!cur.u32(descr_crc)) return false;
-    if (crc32(buf.data() + pos, covered) != descr_crc) return false;
+    if (crc32(buf + pos, covered) != descr_crc) return false;
 
     if (comp == 0 || orig == 0 || comp > pos) return false;
 
@@ -122,7 +100,7 @@ bool parse_descriptor(const std::vector<std::uint8_t>& buf, std::size_t pos, Blo
     return true;
 }
 
-bool read_block(const std::vector<std::uint8_t>& buf, const BlockRef& block,
+bool read_block(const std::uint8_t* buf, std::size_t size, const BlockRef& block,
                 std::vector<std::uint8_t>& out, std::string& error)
 {
     if (block.comp_size > SIZE_MAX || block.orig_size > SIZE_MAX) {
@@ -131,12 +109,12 @@ bool read_block(const std::vector<std::uint8_t>& buf, const BlockRef& block,
     }
     const std::size_t comp = static_cast<std::size_t>(block.comp_size);
     const std::size_t orig = static_cast<std::size_t>(block.orig_size);
-    if (block.pos > buf.size() || buf.size() - static_cast<std::size_t>(block.pos) < comp) {
+    if (block.pos > size || size - static_cast<std::size_t>(block.pos) < comp) {
         error = "block data out of range";
         return false;
     }
 
-    if (!decompress(block.method, buf.data() + block.pos, comp, orig, out, error)) return false;
+    if (!decompress(block.method, buf + block.pos, comp, orig, out, error)) return false;
     if (crc32(out.data(), out.size()) != block.crc) {
         error = "block CRC mismatch";
         return false;
@@ -144,23 +122,23 @@ bool read_block(const std::vector<std::uint8_t>& buf, const BlockRef& block,
     return true;
 }
 
-bool find_footer(const std::vector<std::uint8_t>& buf, BlockRef& footer)
+bool find_footer(const std::uint8_t* buf, std::size_t size, BlockRef& footer)
 {
-    if (buf.size() < 4) return false;
-    const std::size_t window = std::min(format::kDescriptorSearchWindow, buf.size());
-    const std::size_t base = buf.size() - window;
+    if (size < 4) return false;
+    const std::size_t window = std::min(format::kDescriptorSearchWindow, size);
+    const std::size_t base = size - window;
 
     // Search backwards for the last valid descriptor, as arc.exe does, so a
     // false signature inside data cannot hijack the footer.
     for (std::size_t i = window - 4 + 1; i-- > 0;) {
         const std::size_t pos = base + i;
         if (buf[pos + 3] != format::kSignature[3]) continue;
-        if (std::memcmp(buf.data() + pos, format::kSignature.data(), format::kSignature.size()) !=
+        if (std::memcmp(buf + pos, format::kSignature.data(), format::kSignature.size()) !=
             0) {
             continue;
         }
         BlockRef candidate;
-        if (parse_descriptor(buf, pos, candidate) && candidate.type == kFooterBlock) {
+        if (parse_descriptor(buf, size, pos, candidate) && candidate.type == kFooterBlock) {
             footer = candidate;
             return true;
         }
@@ -428,16 +406,16 @@ bool parse_directory(const std::vector<std::uint8_t>& data, std::uint64_t dir_bl
 bool Archive::open(const std::filesystem::path& path, Archive& archive, std::string& error)
 {
     Archive result;
-    if (!load_file(path, result.buf_, error)) return false;
+    if (!result.file_.open(path, error)) return false;
 
     BlockRef footer;
-    if (!find_footer(result.buf_, footer)) {
+    if (!find_footer(result.file_.data(), result.file_.size(), footer)) {
         error = "'" + path.string() + "' is not a FreeArc archive (no valid footer)";
         return false;
     }
 
     std::vector<std::uint8_t> footer_data;
-    if (!read_block(result.buf_, footer, footer_data, error)) return false;
+    if (!read_block(result.file_.data(), result.file_.size(), footer, footer_data, error)) return false;
     if (!parse_footer(footer_data, result.info_, error)) return false;
 
     for (auto& block : result.info_.blocks) {
@@ -456,7 +434,7 @@ bool Archive::open(const std::filesystem::path& path, Archive& archive, std::str
     for (const auto& block : result.info_.blocks) {
         if (block.type != kHeaderBlock) continue;
         std::vector<std::uint8_t> header;
-        if (!read_block(result.buf_, block, header, error)) return false;
+        if (!read_block(result.file_.data(), result.file_.size(), block, header, error)) return false;
         if (header.size() != format::kHeaderBlockSize ||
             std::memcmp(header.data(), format::kSignature.data(), format::kSignature.size()) != 0) {
             error = "invalid HEADER_BLOCK";
@@ -467,7 +445,7 @@ bool Archive::open(const std::filesystem::path& path, Archive& archive, std::str
     for (const auto& block : result.info_.blocks) {
         if (block.type != kDirBlock) continue;
         std::vector<std::uint8_t> dir;
-        if (!read_block(result.buf_, block, dir, error)) return false;
+        if (!read_block(result.file_.data(), result.file_.size(), block, dir, error)) return false;
         if (!parse_directory(dir, block.pos, result.info_, error)) return false;
     }
 
@@ -483,12 +461,12 @@ bool Archive::read_data_block(std::size_t index, std::vector<std::uint8_t>& out,
         return false;
     }
     const DataBlock& block = info_.data_blocks[index];
-    if (block.pos > buf_.size() || buf_.size() - static_cast<std::size_t>(block.pos) <
+    if (block.pos > file_.size() || file_.size() - static_cast<std::size_t>(block.pos) <
                                         static_cast<std::size_t>(block.comp_size)) {
         error = "data block out of range";
         return false;
     }
-    return decompress(block.method, buf_.data() + block.pos,
+    return decompress(block.method, file_.data() + block.pos,
                       static_cast<std::size_t>(block.comp_size),
                       static_cast<std::size_t>(block.orig_size), out, error);
 }

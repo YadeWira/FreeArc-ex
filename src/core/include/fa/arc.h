@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "fa/mapped_file.h"
+
 // Read side of the .arc format (docs/format/ARC-FORMAT.md). Milestone M1: control
 // blocks and data blocks with `storing` and a single `lzma` stage.
 namespace fa {
@@ -69,7 +71,7 @@ public:
                          std::string& error) const;
 
 private:
-    std::vector<std::uint8_t> buf_;
+    MappedFile file_;
     ArchiveInfo info_;
 };
 

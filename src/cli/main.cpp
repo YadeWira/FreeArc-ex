@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "fa/arc.h"
+#include "fa/arc_writer.h"
 #include "fa/crc32.h"
 #include "fa/format.h"
 
@@ -29,8 +30,11 @@ void print_usage(std::FILE* out)
                  "\n"
                  "Usage: arc-ex command [options...] archive [files...]\n"
                  "\n"
-                 "Commands (M1, read side):\n"
+                 "Commands (M1):\n"
+                 "  a        add files to a new archive\n"
+                 "             -mMETHOD   compression: 0/storing or lzma[:DICT]\n"
                  "  l        list archive contents\n"
+                 "  lb       bare list of file names\n"
                  "  t        test archive integrity (per-file CRCs)\n"
                  "  x        extract archive\n"
                  "             -dpDIR   extract into DIR (default: current directory)\n"
@@ -230,7 +234,46 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    if (command != "l" && command != "t" && command != "x") {
+    if (command == "a") {
+        // a archive[.arc] path... [-mMETHOD]
+        std::string archive;
+        std::vector<std::filesystem::path> inputs;
+        fa::AddOptions options;
+        bool method_given = false;
+        for (int i = 2; i < argc; ++i) {
+            const std::string_view arg(argv[i]);
+            if (arg.rfind("-m", 0) == 0 && arg.size() > 2) {
+                options.method = std::string(arg.substr(2));
+                method_given = true;
+            } else if (arg.rfind("-dm", 0) == 0) {
+                // Directory method: stored for now, accepted for CLI compatibility.
+            } else if (arg == "--no-progress" || arg.rfind("-di", 0) == 0) {
+                // Accepted, no effect yet.
+            } else if (!arg.empty() && arg[0] == '-' && arg != "-") {
+                std::fprintf(stderr, "arc-ex: unknown option '%.*s'\n",
+                             static_cast<int>(arg.size()), arg.data());
+                return 2;
+            } else if (archive.empty()) {
+                archive = std::string(arg);
+            } else {
+                inputs.emplace_back(arg);
+            }
+        }
+        if (archive.empty() || inputs.empty()) {
+            std::fprintf(stderr, "arc-ex: usage: arc-ex a archive.arc path... [-mMETHOD]\n");
+            return 2;
+        }
+        if (!method_given) options.method = "lzma";
+        std::string error;
+        if (!fa::create_archive(archive, inputs, options, error)) {
+            std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
+            return 1;
+        }
+        std::printf("Archive created: %s\n", archive.c_str());
+        return 0;
+    }
+
+    if (command != "l" && command != "lb" && command != "t" && command != "x") {
         std::fprintf(stderr, "arc-ex: command '%.*s' is not implemented yet\n",
                      static_cast<int>(command.size()), command.data());
         return 2;
@@ -275,5 +318,11 @@ int main(int argc, char** argv)
     }
 
     if (command == "l") return list_archive(archive.info());
+    if (command == "lb") {
+        for (const auto& file : archive.info().files) {
+            std::printf("%s\n", file.name.c_str());
+        }
+        return 0;
+    }
     return process_archive(archive, output_dir, command == "x");
 }
