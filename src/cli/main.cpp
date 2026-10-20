@@ -12,9 +12,58 @@
 #include "fa/crc32.h"
 #include "fa/format.h"
 #include "fa/preset.h"
+#include "fa/method.h"
 #include "fa/update.h"
 
 namespace {
+
+// FreeArc's -s grammar: "" = all together, "-" = one file per block, "e" = by
+// extension, "100f" = 100 files, "10m"/"1mb" = by size. Tokens concatenate.
+bool parse_solid(const std::string& text, std::vector<fa::SolidRule>& rules, std::string& error)
+{
+    if (text.empty()) {
+        rules.push_back(fa::SolidRule{});
+        return true;
+    }
+    if (text == "-") {
+        rules.push_back({fa::SolidRule::Kind::None, 0});
+        return true;
+    }
+    rules.clear();
+    std::size_t i = 0;
+    while (i < text.size()) {
+        const char c = text[i];
+        if (c == 'e') {
+            rules.push_back({fa::SolidRule::Kind::Ext, 0});
+            ++i;
+            continue;
+        }
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            error = "bad solid option '-s" + text + "'";
+            return false;
+        }
+        std::size_t start = i;
+        while (i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) ++i;
+        const std::string number = text.substr(start, i - start);
+        std::string suffix;
+        while (i < text.size() && std::isalpha(static_cast<unsigned char>(text[i]))) {
+            suffix.push_back(static_cast<char>(std::tolower(text[i])));
+            ++i;
+        }
+        if (suffix.empty() || suffix == "f") {
+            rules.push_back({fa::SolidRule::Kind::Files,
+                             static_cast<std::uint64_t>(std::strtoull(number.c_str(), nullptr, 10))});
+        } else {
+            const std::uint64_t size = fa::parse_mem(number + suffix);
+            if (size == 0) {
+                error = "bad solid option '-s" + text + "'";
+                return false;
+            }
+            rules.push_back({fa::SolidRule::Kind::Size, size});
+        }
+    }
+    return true;
+}
 
 constexpr const char* kProgram = "FreeArc-ex";
 constexpr const char* kVersion = "0.1.0";
@@ -252,6 +301,12 @@ int main(int argc, char** argv)
                 method_given = true;
             } else if (arg.rfind("-dm", 0) == 0) {
                 // Directory method: stored for now, accepted for CLI compatibility.
+            } else if (arg.rfind("-s", 0) == 0) {
+                std::string solid_error;
+                if (!parse_solid(std::string(arg.substr(2)), options.solid, solid_error)) {
+                    std::fprintf(stderr, "arc-ex: %s\n", solid_error.c_str());
+                    return 2;
+                }
             } else if (arg == "--no-progress" || arg.rfind("-di", 0) == 0) {
                 // Accepted, no effect yet.
             } else if (!arg.empty() && arg[0] == '-' && arg != "-") {

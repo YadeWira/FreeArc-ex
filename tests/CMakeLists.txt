@@ -78,3 +78,15 @@ foreach(method lzma rep+lzma)
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/update.sh
                      $<TARGET_FILE:arc-ex> ${method})
 endforeach()
+
+find_program(FA_WINE_SOLID NAMES wine)
+set(FA_ARC_ORACLE_SOLID "/mnt/IA_LAB/agentes/arc/bin/Arc.exe")
+if(FA_WINE_SOLID AND EXISTS "${FA_ARC_ORACLE_SOLID}")
+    add_test(NAME solid_blocks
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/solid.sh
+                     $<TARGET_FILE:arc-ex> ${FA_ARC_ORACLE_SOLID} ${FA_WINE_SOLID})
+else()
+    add_test(NAME solid_blocks
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/solid.sh
+                     $<TARGET_FILE:arc-ex>)
+endif()

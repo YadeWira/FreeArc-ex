@@ -84,6 +84,11 @@ as each fix lands with its test.
   limited to the block size. Binary presets work end to end. **Text presets
   (4t/5t and above) are blocked by PPMd**, so a tree with `.txt` files currently
   stops with a clear error instead of writing a wrong archive.
+- **Solid blocks**: `-s` (all together), `-s-` (one file per block), `-s<N>f`
+  (by count), `-s<SIZE>` (`k`/`m`/`g`), `-se` (by extension) and combinations
+  such as `-se10f1m`. Directories always go to their own storing block, as the
+  original does. Block structure matches `arc.exe` for the tested options
+  (`tests/integration/solid.sh`).
 - Commands: `a`, `u`, `f`, `d`, `l`, `lb`, `t`, `x`. Update **rewrites the
   archive and recompresses every block** (correct, but it does not reuse old
   blocks the way `arc.exe` does, and the block layout therefore differs); block

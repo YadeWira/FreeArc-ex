@@ -23,10 +23,19 @@ struct NewEntry {
     std::uint32_t crc = 0;
 };
 
+// Solid-block grouping (-s...), parsed from FreeArc's grammar:
+//   (empty) all together, "-" one file per block, "10m" by size, "100f" by
+//   count, "e" by extension. Several criteria can be combined ("e100f10m").
+struct SolidRule {
+    enum class Kind { All, None, Files, Size, Ext } kind = Kind::All;
+    std::uint64_t value = 0;  // files or bytes
+};
+
 struct AddOptions {
     std::string method = "lzma";   // preset ("4"), name ("#b") or raw chain
     const MethodTable* table = nullptr;     // required for presets/names
     const FileClasses* classes = nullptr;   // file classification (arc.groups)
+    std::vector<SolidRule> solid{SolidRule{}};  // default: one block per method
 };
 
 // Creates a new archive containing `inputs` (files and/or directories, walked

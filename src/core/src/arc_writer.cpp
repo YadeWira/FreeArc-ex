@@ -222,7 +222,9 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
         }
     }
 
-    // One solid block per distinct method, in first-seen order.
+    // Directories always go to their own storing block, as the original does.
+    // Files are grouped by resolved method and then split into solid blocks
+    // according to the -s criteria.
     struct Block {
         std::string method;
         std::vector<std::size_t> entries;
@@ -231,21 +233,96 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
         std::uint64_t pos = 0;
     };
     std::vector<Block> blocks;
-    std::map<std::string, std::size_t> block_of_method;
 
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-        const std::string& method = method_of[i];
-        auto it = block_of_method.find(method);
-        if (it == block_of_method.end()) {
-            block_of_method[method] = blocks.size();
-            it = block_of_method.find(method);
-            blocks.push_back(Block{method, {}, {}, {}, 0});
+    auto add_block = [&](const std::string& method, std::vector<std::size_t> indices) {
+        Block block;
+        block.method = method;
+        block.entries = std::move(indices);
+        for (const auto index : block.entries) {
+            if (!entries[index].is_dir) {
+                block.plain.insert(block.plain.end(), entries[index].data.begin(),
+                                   entries[index].data.end());
+            }
         }
-        const std::size_t b = it->second;
-        blocks[b].entries.push_back(i);
-        if (!entries[i].is_dir) {
-            blocks[b].plain.insert(blocks[b].plain.end(), entries[i].data.begin(),
-                                   entries[i].data.end());
+        blocks.push_back(std::move(block));
+    };
+
+    std::vector<std::size_t> dirs_only;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].is_dir) dirs_only.push_back(i);
+    }
+    if (!dirs_only.empty()) add_block("storing", std::move(dirs_only));
+
+    // Method groups for the files, in first-seen order.
+    std::vector<std::pair<std::string, std::vector<std::size_t>>> groups;
+    std::map<std::string, std::size_t> group_of;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].is_dir) continue;
+        const std::string& method = method_of[i];
+        auto it = group_of.find(method);
+        if (it == group_of.end()) {
+            group_of[method] = groups.size();
+            it = group_of.find(method);
+            groups.emplace_back(method, std::vector<std::size_t>{});
+        }
+        groups[it->second].second.push_back(i);
+    }
+
+    auto extension_of = [](const std::string& name) {
+        const std::size_t dot = name.find_last_of('.');
+        const std::size_t slash = name.find_last_of('/');
+        return (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+                   ? std::string()
+                   : name.substr(dot);
+    };
+
+    auto chunk_len = [&](const std::vector<SolidRule>& rules,
+                         const std::vector<std::size_t>& indices, std::size_t start) {
+        std::size_t best = indices.size() - start;
+        for (const auto& rule : rules) {
+            std::size_t n = best;
+            switch (rule.kind) {
+                case SolidRule::Kind::All: n = best; break;
+                case SolidRule::Kind::None: n = 1; break;
+                case SolidRule::Kind::Files: n = static_cast<std::size_t>(rule.value); break;
+                case SolidRule::Kind::Size: {
+                    std::uint64_t sum = 0;
+                    n = 0;
+                    for (std::size_t i = start; i < indices.size(); ++i) {
+                        if (sum >= rule.value) break;
+                        sum += entries[indices[i]].size;
+                        ++n;
+                    }
+                    break;
+                }
+                case SolidRule::Kind::Ext: {
+                    const std::string ext = extension_of(entries[indices[start]].name);
+                    n = 0;
+                    for (std::size_t i = start; i < indices.size(); ++i) {
+                        if (extension_of(entries[indices[i]].name) != ext) break;
+                        ++n;
+                    }
+                    break;
+                }
+            }
+            if (n == 0) n = 1;
+            if (n < best) best = n;
+        }
+        return best;
+    };
+
+    const std::vector<SolidRule> rules =
+        options.solid.empty() ? std::vector<SolidRule>{SolidRule{}} : options.solid;
+
+    for (const auto& [method, indices] : groups) {
+        std::size_t start = 0;
+        while (start < indices.size()) {
+            const std::size_t len = chunk_len(rules, indices, start);
+            std::vector<std::size_t> chunk(indices.begin() + static_cast<std::ptrdiff_t>(start),
+                                           indices.begin() +
+                                               static_cast<std::ptrdiff_t>(start + len));
+            start += len;
+            add_block(method, std::move(chunk));
         }
     }
 
