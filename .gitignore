@@ -1,0 +1,12 @@
+build/
+build-*/
+compile_commands.json
+*.o
+*.obj
+*.exe
+*.dll
+*.a
+*.so
+*.log
+tests/corpus/data/
+.cache/
