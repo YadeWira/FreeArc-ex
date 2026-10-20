@@ -3,7 +3,8 @@
 # that its a/l/t/x cycle produces the expected data. This is M0's requirement.
 set -euo pipefail
 
-oracle=${FA_ARC_ORACLE:-/mnt/IA_LAB/agentes/PArc/ref/Arc.exe}
+oracle=${FA_ARC_ORACLE:-/mnt/IA_LAB/agentes/arc/bin/Arc.exe}
+unarc=${FA_UNARC:-/mnt/IA_LAB/agentes/arc/bin/unarc.i386}
 if [ ! -f "$oracle" ]; then
     echo "ERROR: oracle not found at '$oracle'"
     echo "       point to another copy with FA_ARC_ORACLE=/path/to/Arc.exe"
@@ -42,4 +43,11 @@ for f in a.txt sub/b.bin empty.dat; do
     fi
 done
 
-echo "oracle OK: a/t/x with -m1, three files verified"
+# Extraction oracle: unarc (the 0.67 unpacker) has to accept the same archive.
+unarc_out=$(wine "$unarc" t out.arc 2>&1 | tr -d '\r' | tail -1 || true)
+if [ "$unarc_out" != "All OK" ]; then
+    echo "ERROR: unarc did not report All OK (got: $unarc_out)"
+    exit 1
+fi
+
+echo "oracle OK: a/t/x with -m1, three files verified; unarc test OK"

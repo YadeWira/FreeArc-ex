@@ -17,11 +17,19 @@
 Every engine change is compared against the original binary, never against our
 own expectations:
 
-- **Oracle**: `Arc.exe` 0.67.1 under wine.
-  - Path: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`
-  - sha256: `1b23732e158540eb159563b557ab1d396b12cd56178ea9387e696d054d3e2172`
-  - Version reported: `FreeArc 0.67.1 (March 07 2021)` (krinkels.org build)
-  - Check: `scripts/oracle-smoke.sh`
+- **Oracle**: `Arc.exe` 0.67.1 under wine, plus the `unarc` unpacker as the
+  extraction authority. FreeArc-ex keeps its own copies so the tests do not
+  depend on another project's workspace:
+  - `/mnt/IA_LAB/agentes/arc/bin/Arc.exe`
+    sha256 `1b23732e158540eb159563b557ab1d396b12cd56178ea9387e696d054d3e2172`,
+    reports `FreeArc 0.67.1 (March 07 2021)` (krinkels.org build)
+  - `/mnt/IA_LAB/agentes/arc/bin/unarc.i386`
+    sha256 `67e20bee81c1cac87438d0f1d8e76127c0d6df354f47fcec94a7c87c8d3d2377`,
+    `FreeArc 0.67 unpacker 2014-03-16`
+  - `/mnt/IA_LAB/agentes/arc/bin/unarc.x64`
+    sha256 `d25cfd4939be4f7843f2418b1e0ccd7abcf2ab11028d04954f985df93d475853`
+  - Check: `scripts/oracle-smoke.sh` (runs a/t/x plus an `unarc` test)
+  - Overrides: `FA_ARC_ORACLE`, `FA_UNARC`
 - **Direction 1**: what `arc-ex` writes is listed, tested and extracted by
   `arc.exe` (plus `unarc` from 0.67 for the SFX extraction path).
 - **Direction 2**: what `arc.exe` writes is read by `arc-ex`, with an identical

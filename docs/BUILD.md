@@ -53,12 +53,13 @@ confirms the binary works. Speed measurements belong to the `arm64` VM.
 
 ## Compatibility oracle
 
-The oracle is `Arc.exe` 0.67.1 under wine:
+The oracle is `Arc.exe` 0.67.1 under wine, with `unarc` as the extraction
+authority. FreeArc-ex keeps its own copies:
 
 ```
-/mnt/IA_LAB/agentes/PArc/ref/Arc.exe
-sha256 1b23732e158540eb159563b557ab1d396b12cd56178ea9387e696d054d3e2172
-FreeArc 0.67.1 (March 07 2021, krinkels.org build)
+/mnt/IA_LAB/agentes/arc/bin/Arc.exe       FreeArc 0.67.1 (March 07 2021, krinkels.org)
+/mnt/IA_LAB/agentes/arc/bin/unarc.i386    FreeArc 0.67 unpacker 2014-03-16
+/mnt/IA_LAB/agentes/arc/bin/unarc.x64
 ```
 
 Quick check that the oracle responds:
@@ -67,7 +68,8 @@ Quick check that the oracle responds:
 scripts/oracle-smoke.sh
 ```
 
-Another binary can be used with `FA_ARC_ORACLE=/path/to/Arc.exe`.
+Another binary can be used with `FA_ARC_ORACLE=/path/to/Arc.exe`, and the
+unpacker with `FA_UNARC=/path/to/unarc`.
 
 ## CMake options
 
