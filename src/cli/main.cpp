@@ -302,6 +302,9 @@ int main(int argc, char** argv)
                 method_given = true;
             } else if (arg.rfind("-dm", 0) == 0) {
                 // Directory method: stored for now, accepted for CLI compatibility.
+            } else if (arg.rfind("-rr", 0) == 0) {
+                options.recovery = std::string(arg.substr(3));
+                options.recovery_present = true;
             } else if (arg.rfind("-hp", 0) == 0) {
                 fa::set_password(std::string(arg.substr(3)));
                 options.header_encryption = true;

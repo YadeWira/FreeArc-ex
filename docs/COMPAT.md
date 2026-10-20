@@ -95,6 +95,12 @@ as each fix lands with its test.
   both directions with `arc.exe`. `-hp` additionally encrypts the header and the
   directory (each control block with its own salt/IV; the footer stays readable),
   so even listing requires the password; verified in both directions.
+- **Recovery record**: `-rr` writes the rotating-XOR parity record plus the
+  sector CRCs (two `RECOVERY_BLOCK`s after a provisional footer, then the
+  definitive footer), with FreeArc's parameter derivation (`-rr4%`, `-rr1m`,
+  `-rr10`, `-rr8*4096`, `-rr3%;4096`). `arc.exe` reports the record, tests the
+  archive and repairs a damaged sector with it. Our own `r` (repair) is not
+  implemented yet: `t` reports the CRC mismatch.
 - Commands: `a`, `u`, `f`, `d`, `l`, `lb`, `t`, `x`. Update **reuses the blocks
   whose files are all unchanged** (they are copied verbatim, compressed bytes
   included) and recompresses only the affected ones; blocks that gain or lose

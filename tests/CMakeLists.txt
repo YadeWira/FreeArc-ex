@@ -102,3 +102,12 @@ else()
     add_test(NAME crypt
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/crypt.sh $<TARGET_FILE:arc-ex>)
 endif()
+
+if(FA_WINE_SOLID AND EXISTS "${FA_ARC_ORACLE_SOLID}")
+    add_test(NAME recovery
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/recovery.sh
+                     $<TARGET_FILE:arc-ex> ${FA_ARC_ORACLE_SOLID} ${FA_WINE_SOLID})
+else()
+    add_test(NAME recovery
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/recovery.sh $<TARGET_FILE:arc-ex>)
+endif()

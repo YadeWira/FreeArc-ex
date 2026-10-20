@@ -37,6 +37,8 @@ struct AddOptions {
     const FileClasses* classes = nullptr;   // file classification (arc.groups)
     std::vector<SolidRule> solid{SolidRule{}};  // default: one block per method
     bool header_encryption = false;             // -hp: also encrypt the header and directory
+    std::string recovery;                        // -rr text, empty = no recovery record
+    bool recovery_present = false;               // write the recovery field in the footer
 };
 
 // Creates a new archive containing `inputs` (files and/or directories, walked

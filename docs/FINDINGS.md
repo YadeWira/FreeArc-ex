@@ -93,6 +93,26 @@ the 1.10 decoder arrives with the library update).
   CRC of the *plaintext*, so a bad password fails on the check-code before any
   CRC check.
 
+## Recovery record (2026-10-20)
+
+- Layout with `-rr`: HEADER, data, DIR, **provisional footer**, two
+  `RECOVERY_BLOCK`s (parity sectors and info+CRCs), **definitive footer**. The
+  record protects everything up to and including the provisional footer, so
+  `rr_pos` is the first recovery block.
+- Footer/block offsets are relative to the *data* position of the block that
+  contains them; mixing them up shifts every position and makes the record
+  appear corrupt (cost two iterations to see).
+- The info block starts with `CStr "0.36"`, `VInt arcsize`, `VInt offset`
+  (offset = `block_pos - init_pos`; with protection from byte 0 it is the block
+  position itself), then one `(sector_size, rec_sectors)` pair, then 4-byte LE
+  CRCs: one per data sector and one per recovery sector.
+- The parity is a **rotating XOR** starting at
+  `i0 = (-arc_sectors) mod rec_sectors`; small archives get small sectors
+  (`4%` of ~108 KB gave 512-byte sectors and 7 recovery sectors).
+- Verified end to end: `arc.exe` reports "7 recovery sectors (3584 bytes)", and
+  after corrupting 512 bytes it repairs the archive and the repaired copy passes
+  `t`.
+
 ## Shared development resources
 
 - Oracle binary: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`

@@ -123,6 +123,133 @@ bool add_path(const std::filesystem::path& disk_path, const std::string& name,
     return true;
 }
 
+std::vector<std::uint8_t> make_descriptor(std::uint32_t type, const std::string& method,
+                                          std::uint64_t orig, std::uint64_t comp,
+                                          std::uint32_t crc);
+
+struct Span {
+    const std::uint8_t* data;
+    std::size_t size;
+};
+
+// Builds the recovery record: rotating XOR of the protected sectors plus a CRC
+// per data sector and per recovery sector (docs/format/ARC-FORMAT.md, 7.4).
+bool build_recovery(const std::string& text, const std::vector<Span>& spans, std::uint64_t arcsize,
+                    std::vector<std::uint8_t>& sectors_out, std::vector<std::uint8_t>& crcs_out,
+                    std::string& error)
+{
+    // Parse the amount requested by -rr.
+    std::uint64_t wanted = 0;
+    std::uint64_t forced_sector = 0;
+    const std::size_t semi = text.find(';');
+    const std::size_t star = text.find('*');
+    if (semi != std::string::npos) {
+        wanted = parse_mem(text.substr(0, semi));
+        forced_sector = parse_mem(text.substr(semi + 1));
+    } else if (star != std::string::npos) {
+        const std::uint64_t count = parse_mem(text.substr(0, star));
+        forced_sector = parse_mem(text.substr(star + 1));
+        wanted = count * forced_sector;
+    } else if (!text.empty() && (text.back() == '%' || text.back() == 'p')) {
+        const std::uint64_t percent = parse_mem(text.substr(0, text.size() - 1));
+        wanted = (arcsize * percent + 99) / 100;  // divRoundUp
+    } else {
+        const std::uint64_t n = parse_mem(text);
+        wanted = n * 512;  // no suffix or "s" means sectors of 512 bytes
+    }
+
+    std::uint64_t sector_size = forced_sector;
+    if (sector_size == 0) {
+        if (wanted == 0) {
+            sector_size = 4096;
+        } else {
+            const std::uint64_t ratio = (40 * arcsize) / wanted;
+            if (ratio <= 1) {
+                sector_size = 512;
+            } else {
+                sector_size = 1;
+                while ((sector_size << 1) <= ratio) sector_size <<= 1;
+            }
+            if (sector_size < 512) sector_size = 512;
+        }
+    }
+
+    const std::uint64_t arc_sectors = (arcsize + sector_size - 1) / sector_size;
+    const std::uint64_t crcs_size0 = arc_sectors * 4;
+    const std::uint64_t rec_size = std::max(wanted, crcs_size0);
+    const std::uint64_t rec_sectors =
+        (rec_size <= crcs_size0) ? 0 : (rec_size - crcs_size0 + sector_size - 1) / sector_size;
+    const std::uint64_t rec_sectors_size = rec_sectors * sector_size;
+
+    // Rotating XOR over the protected bytes.
+    sectors_out.assign(static_cast<std::size_t>(rec_sectors_size), 0);
+    std::vector<std::uint32_t> data_crcs;
+    data_crcs.reserve(static_cast<std::size_t>(arc_sectors));
+
+    std::size_t span_index = 0;
+    std::size_t span_offset = 0;
+    std::uint64_t consumed = 0;
+    std::uint64_t group = (rec_sectors == 0)
+                              ? 0
+                              : (rec_sectors - (arc_sectors % rec_sectors)) % rec_sectors;
+
+    std::vector<std::uint8_t> chunk(static_cast<std::size_t>(sector_size));
+    while (consumed < arcsize) {
+        const std::size_t len =
+            static_cast<std::size_t>(std::min<std::uint64_t>(sector_size, arcsize - consumed));
+        std::size_t filled = 0;
+        while (filled < len) {
+            while (span_index < spans.size() && span_offset == spans[span_index].size) {
+                ++span_index;
+                span_offset = 0;
+            }
+            if (span_index >= spans.size()) {
+                error = "recovery: protected region is shorter than expected";
+                return false;
+            }
+            const auto& span = spans[span_index];
+            const std::size_t n = std::min(len - filled, span.size - span_offset);
+            std::memcpy(chunk.data() + filled, span.data + span_offset, n);
+            filled += n;
+            span_offset += n;
+        }
+
+        data_crcs.push_back(crc32(chunk.data(), len));
+        if (rec_sectors != 0) {
+            std::uint8_t* target = sectors_out.data() + group * sector_size;
+            for (std::size_t i = 0; i < len; ++i) target[i] ^= chunk[i];
+            group = (group + 1) % rec_sectors;
+        }
+        consumed += len;
+    }
+    // The last sector is XOR-ed only up to its length, but its CRC covers the
+    // whole sector buffer (zero padding), as the reference does.
+    if (rec_sectors != 0 && arc_sectors % rec_sectors != 0) {
+        // nothing to fix: the padding bytes of the recovery sector are already 0
+    }
+
+    // Control info + CRCs of the data sectors + CRCs of the recovery sectors.
+    std::vector<std::uint8_t> out;
+    put_cstr(out, "0.36");
+    write_vint(out, arcsize);
+    const std::uint64_t rec1_descr_size = make_descriptor(kRecoveryBlock, "storing",
+                                                          rec_sectors_size, rec_sectors_size, 0)
+                                              .size();
+    const std::uint64_t rec2_pos = arcsize + rec_sectors_size + rec1_descr_size;
+    write_vint(out, rec2_pos);  // offset: init_pos = block_pos - offset = 0
+    write_vint(out, 1);         // one (sector_size, rec_sectors) pair
+    write_vint(out, sector_size);
+    write_vint(out, rec_sectors);
+
+    for (const auto crc : data_crcs) put_u32(out, crc);
+    for (std::uint64_t r = 0; r < rec_sectors; ++r) {
+        put_u32(out, crc32(sectors_out.data() + r * sector_size,
+                           static_cast<std::size_t>(sector_size)));
+    }
+    crcs_out = std::move(out);
+    return true;
+}
+
 // Prepares a control block for writing: with -hp it is encrypted with its own
 // salt and IV, and the stored method keeps everything except the key.
 bool prepare_control_block(const std::vector<std::uint8_t>& plain, bool encrypt,
@@ -490,25 +617,91 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
                         crc32(dir_data.data(), dir_data.size()));
     const std::uint64_t before_footer = dir_pos + dir_stored.size() + dir_descr.size();
 
-    std::vector<std::uint8_t> footer_data;
-    write_vint(footer_data, 2);  // HEADER and DIR
-    write_vint(footer_data, kHeaderBlock);
-    put_cstr(footer_data, header_method);
-    write_vint(footer_data, before_footer);
-    write_vint(footer_data, header.size());
-    write_vint(footer_data, header_stored.size());
-    put_u32(footer_data, crc32(header.data(), header.size()));
+    struct FooterEntry {
+        std::uint32_t type;
+        std::string method;
+        std::uint64_t pos, orig, comp;
+        std::uint32_t crc;
+    };
 
-    write_vint(footer_data, kDirBlock);
-    put_cstr(footer_data, dir_method);
-    write_vint(footer_data, before_footer - dir_pos);
-    write_vint(footer_data, dir_data.size());
-    write_vint(footer_data, dir_stored.size());
-    put_u32(footer_data, crc32(dir_data.data(), dir_data.size()));
+    const std::vector<FooterEntry> base_blocks = {
+        {kHeaderBlock, header_method, 0, header.size(), header_stored.size(),
+         crc32(header.data(), header.size())},
+        {kDirBlock, dir_method, dir_pos, dir_data.size(), dir_stored.size(),
+         crc32(dir_data.data(), dir_data.size())},
+    };
 
-    footer_data.push_back(0);    // not locked
-    write_vint(footer_data, 0);  // old comment length
+    auto build_footer = [&](const std::vector<FooterEntry>& list, const std::string& recovery,
+                            std::uint64_t footer_pos) {
+        std::vector<std::uint8_t> out;
+        write_vint(out, list.size());
+        for (const auto& b : list) {
+            write_vint(out, b.type);
+            put_cstr(out, b.method);
+            write_vint(out, footer_pos - b.pos);
+            write_vint(out, b.orig);
+            write_vint(out, b.comp);
+            put_u32(out, b.crc);
+        }
+        out.push_back(0);    // not locked
+        write_vint(out, 0);  // old comment length
+        if (!recovery.empty() || options.recovery_present) put_cstr(out, recovery);
+        return out;
+    };
 
+    // Provisional footer (only when a recovery record is requested): the record
+    // protects everything up to and including it.
+    // Footer offsets are relative to the footer block's *data* position, which
+    // for the provisional footer is right after the directory.
+    std::vector<std::uint8_t> provisional_data;
+    std::vector<std::uint8_t> provisional_descr;
+    std::uint64_t rr_pos = before_footer;
+    if (!options.recovery.empty()) {
+        provisional_data = build_footer(base_blocks, "", before_footer);
+        provisional_descr = make_descriptor(kFooterBlock, "storing", provisional_data.size(),
+                                            provisional_data.size(),
+                                            crc32(provisional_data.data(), provisional_data.size()));
+        rr_pos = before_footer + provisional_data.size() + provisional_descr.size();
+    }
+
+    // Recovery record: rotating XOR of the protected sectors plus their CRCs.
+    std::vector<std::uint8_t> rec_sectors;
+    std::vector<std::uint8_t> rec_crcs;
+    if (!options.recovery.empty()) {
+        std::vector<Span> spans;
+        spans.push_back({header_stored.data(), header_stored.size()});
+        spans.push_back({header_descr.data(), header_descr.size()});
+        for (const auto& block : blocks) spans.push_back({block.packed.data(), block.packed.size()});
+        spans.push_back({dir_stored.data(), dir_stored.size()});
+        spans.push_back({dir_descr.data(), dir_descr.size()});
+        spans.push_back({provisional_data.data(), provisional_data.size()});
+        spans.push_back({provisional_descr.data(), provisional_descr.size()});
+        if (!build_recovery(options.recovery, spans, rr_pos, rec_sectors, rec_crcs, error)) {
+            return false;
+        }
+    }
+
+    std::vector<FooterEntry> final_blocks = base_blocks;
+    std::uint64_t final_pos = rr_pos;
+    if (!options.recovery.empty()) {
+        // Positions of the two recovery blocks, known from the sizes above.
+        const std::uint64_t rec1_pos = rr_pos;
+        const std::uint64_t rec1_descr_size =
+            make_descriptor(kRecoveryBlock, "storing", rec_sectors.size(), rec_sectors.size(),
+                            crc32(rec_sectors.data(), rec_sectors.size()))
+                .size();
+        const std::uint64_t rec2_pos = rec1_pos + rec_sectors.size() + rec1_descr_size;
+        final_blocks.push_back({kRecoveryBlock, "storing", rec1_pos, rec_sectors.size(),
+                                rec_sectors.size(), crc32(rec_sectors.data(), rec_sectors.size())});
+        final_blocks.push_back({kRecoveryBlock, "storing", rec2_pos, rec_crcs.size(),
+                                rec_crcs.size(), crc32(rec_crcs.data(), rec_crcs.size())});
+        final_pos = rec2_pos + rec_crcs.size() +
+                    make_descriptor(kRecoveryBlock, "storing", rec_crcs.size(), rec_crcs.size(),
+                                    crc32(rec_crcs.data(), rec_crcs.size()))
+                        .size();
+    }
+
+    std::vector<std::uint8_t> footer_data = build_footer(final_blocks, options.recovery, final_pos);
     const auto footer_descr =
         make_descriptor(kFooterBlock, "storing", footer_data.size(), footer_data.size(),
                         crc32(footer_data.data(), footer_data.size()));
@@ -530,8 +723,21 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     for (const auto& block : blocks) {
         ok = ok && write_bytes(block.packed);
     }
-    if (!ok || !write_bytes(dir_stored) || !write_bytes(dir_descr) || !write_bytes(footer_data) ||
-        !write_bytes(footer_descr)) {
+    // The directory comes first; the recovery record protects everything up to
+    // and including the provisional footer.
+    ok = ok && write_bytes(dir_stored) && write_bytes(dir_descr);
+    if (!options.recovery.empty()) {
+        ok = ok && write_bytes(provisional_data) && write_bytes(provisional_descr);
+        ok = ok && write_bytes(rec_sectors);
+        ok = ok && write_bytes(make_descriptor(kRecoveryBlock, "storing", rec_sectors.size(),
+                                               rec_sectors.size(),
+                                               crc32(rec_sectors.data(), rec_sectors.size())));
+        ok = ok && write_bytes(rec_crcs);
+        ok = ok && write_bytes(make_descriptor(kRecoveryBlock, "storing", rec_crcs.size(),
+                                               rec_crcs.size(),
+                                               crc32(rec_crcs.data(), rec_crcs.size())));
+    }
+    if (!ok || !write_bytes(footer_data) || !write_bytes(footer_descr)) {
         error = "write error on '" + archive.string() + "'";
         return false;
     }
