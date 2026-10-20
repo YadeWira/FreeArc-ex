@@ -89,11 +89,12 @@ as each fix lands with its test.
   such as `-se10f1m`. Directories always go to their own storing block, as the
   original does. Block structure matches `arc.exe` for the tested options
   (`tests/integration/solid.sh`).
-- Commands: `a`, `u`, `f`, `d`, `l`, `lb`, `t`, `x`. Update **rewrites the
-  archive and recompresses every block** (correct, but it does not reuse old
-  blocks the way `arc.exe` does, and the block layout therefore differs); block
-  reuse is the next optimisation. No masks or selective extraction, no
-  overwrite policy.
+- Commands: `a`, `u`, `f`, `d`, `l`, `lb`, `t`, `x`. Update **reuses the blocks
+  whose files are all unchanged** (they are copied verbatim, compressed bytes
+  included) and recompresses only the affected ones; blocks that gain or lose
+  files are rebuilt. This matches the original's intent, not yet its exact
+  layout in every case (its block-reuse heuristics are more elaborate). No masks
+  or selective extraction, no overwrite policy.
 - Creation writes a single solid data block and stores the directory
   uncompressed; splitting and `-dm` methods arrive later in M2.
 - Reading is memory-mapped; creation still reads each file into memory, so very

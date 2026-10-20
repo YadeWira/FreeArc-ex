@@ -139,12 +139,14 @@ std::vector<std::uint8_t> make_descriptor(std::uint32_t type, const std::string&
 }  // namespace
 
 static bool write_entries(const std::filesystem::path& archive, std::vector<Entry> entries,
-                          const AddOptions& options, std::string& error);
+                          const std::vector<PreservedBlock>& preserved, const AddOptions& options,
+                          std::string& error);
 
 bool write_archive(const std::filesystem::path& archive, std::vector<NewEntry> entries,
-                   const AddOptions& options, std::string& error)
+                   const std::vector<PreservedBlock>& preserved, const AddOptions& options,
+                   std::string& error)
 {
-    return write_entries(archive, std::move(entries), options, error);
+    return write_entries(archive, std::move(entries), preserved, options, error);
 }
 
 bool create_archive(const std::filesystem::path& archive,
@@ -164,11 +166,12 @@ bool create_archive(const std::filesystem::path& archive,
         error = "nothing to add";
         return false;
     }
-    return write_entries(archive, std::move(entries), options, error);
+    return write_entries(archive, std::move(entries), {}, options, error);
 }
 
 static bool write_entries(const std::filesystem::path& archive, std::vector<Entry> entries,
-                          const AddOptions& options, std::string& error)
+                          const std::vector<PreservedBlock>& preserved, const AddOptions& options,
+                          std::string& error)
 {
     if (entries.empty()) {
         error = "nothing to add";
@@ -231,8 +234,34 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
         std::vector<std::uint8_t> plain;
         std::vector<std::uint8_t> packed;
         std::uint64_t pos = 0;
+        bool preserved = false;
     };
     std::vector<Block> blocks;
+
+    // Blocks reused from the previous archive: copied verbatim, in their
+    // original order, before anything else.
+    std::map<std::string, std::size_t> index_of_name;
+    for (std::size_t i = 0; i < entries.size(); ++i) index_of_name[entries[i].name] = i;
+    std::vector<bool> consumed(entries.size(), false);
+
+    for (const auto& old : preserved) {
+        Block block;
+        block.method = old.method;
+        block.packed = old.packed;
+        block.preserved = true;
+        bool complete = true;
+        for (const auto& name : old.files) {
+            const auto it = index_of_name.find(name);
+            if (it == index_of_name.end() || consumed[it->second]) {
+                complete = false;
+                break;
+            }
+            block.entries.push_back(it->second);
+        }
+        if (!complete) continue;  // cannot reuse: fall back to recompression
+        for (const auto index : block.entries) consumed[index] = true;
+        blocks.push_back(std::move(block));
+    }
 
     auto add_block = [&](const std::string& method, std::vector<std::size_t> indices) {
         Block block;
@@ -249,7 +278,7 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
 
     std::vector<std::size_t> dirs_only;
     for (std::size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].is_dir) dirs_only.push_back(i);
+        if (entries[i].is_dir && !consumed[i]) dirs_only.push_back(i);
     }
     if (!dirs_only.empty()) add_block("storing", std::move(dirs_only));
 
@@ -257,7 +286,7 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     std::vector<std::pair<std::string, std::vector<std::size_t>>> groups;
     std::map<std::string, std::size_t> group_of;
     for (std::size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].is_dir) continue;
+        if (entries[i].is_dir || consumed[i]) continue;
         const std::string& method = method_of[i];
         auto it = group_of.find(method);
         if (it == group_of.end()) {
@@ -311,6 +340,19 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
         return best;
     };
 
+    // The directory block always goes first, as in the original.
+    for (std::size_t i = 1; i < blocks.size(); ++i) {
+        const auto& block = blocks[i];
+        bool all_dirs = !block.entries.empty();
+        for (const auto index : block.entries) all_dirs = all_dirs && entries[index].is_dir;
+        if (all_dirs) {
+            Block dir_block = std::move(blocks[i]);
+            blocks.erase(blocks.begin() + static_cast<std::ptrdiff_t>(i));
+            blocks.insert(blocks.begin(), std::move(dir_block));
+            break;
+        }
+    }
+
     const std::vector<SolidRule> rules =
         options.solid.empty() ? std::vector<SolidRule>{SolidRule{}} : options.solid;
 
@@ -338,6 +380,7 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     // Compress each block. Dictionaries are limited to the block size, like the
     // original ("rep:96m" becomes "rep:10kb" on a small block).
     for (auto& block : blocks) {
+        if (block.preserved) continue;  // already compressed
         if (block.plain.empty() || block.method == "storing" || block.method == "0") {
             block.method = "storing";
             block.packed = block.plain;

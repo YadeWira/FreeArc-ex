@@ -11,7 +11,7 @@ of them, with `arc.exe` 0.67.1 as the oracle in both directions. Presets `-m0`..
 through FreeArc's definition table and `arc.groups` classes, with one solid block
 per resolved method, including the PPMd-based text chains on every target (the
 32-bit heap layout is emulated on 64-bit). `u`, `f` and `d` update archives
-(a full rewrite for now) and solid-block grouping follows FreeArc's `-s`
+(reusing untouched blocks) and solid-block grouping follows FreeArc's `-s`
 grammar. LZ4 is pending its 1.10 update and fails with a clear error. Encryption,
 `arc.ini`+Lua and the GTK3 GUI follow; see [`docs/PLAN.md`](docs/PLAN.md).
 

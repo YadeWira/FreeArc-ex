@@ -220,6 +220,7 @@ bool update_archive(const std::filesystem::path& archive,
 
     std::vector<NewEntry> result;
     std::map<std::string, bool> from_disk;
+    std::vector<bool> unchanged(olds.size(), false);
 
     for (const auto& entry : olds) {
         const auto it = disk_by_name.find(entry.name);
@@ -251,6 +252,7 @@ bool update_archive(const std::filesystem::path& archive,
             out.mtime = entry.mtime;
             if (!old_file_data(entry, out.data, error)) return false;
             result.push_back(std::move(out));
+            unchanged[&entry - olds.data()] = true;
         }
         from_disk[entry.name] = true;
     }
@@ -271,8 +273,36 @@ bool update_archive(const std::filesystem::path& archive,
         error = "nothing to update";
         return false;
     }
+    // Blocks whose files are all unchanged are copied verbatim instead of being
+    // recompressed; that is what makes an update cheap on big archives.
+    std::map<std::string, bool> is_unchanged;
+    for (std::size_t i = 0; i < olds.size(); ++i) {
+        if (unchanged[i]) is_unchanged[olds[i].name] = true;
+    }
+
+    std::vector<PreservedBlock> preserved;
+    for (std::size_t b = 0; b < info.data_blocks.size(); ++b) {
+        const DataBlock& block = info.data_blocks[b];
+        if (block.file_count == 0) continue;
+        PreservedBlock candidate;
+        candidate.method = block.method;
+        bool reusable = true;
+        for (std::size_t i = 0; i < block.file_count; ++i) {
+            const FileEntry& file = info.files[block.first_file + i];
+            if (file.is_dir || is_unchanged.count(file.name) == 0) {
+                reusable = false;
+                break;
+            }
+            candidate.files.push_back(file.name);
+        }
+        if (!reusable) continue;
+        if (!old.raw_data_block(b, candidate.packed, error)) return false;
+        candidate.orig_size = block.orig_size;
+        preserved.push_back(std::move(candidate));
+    }
+
     old.close();
-    return write_archive(archive, std::move(result), options, error);
+    return write_archive(archive, std::move(result), preserved, options, error);
 }
 
 }  // namespace fa

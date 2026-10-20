@@ -41,9 +41,25 @@ struct AddOptions {
 // Creates a new archive containing `inputs` (files and/or directories, walked
 // recursively). Files are grouped into solid blocks by the method the preset
 // resolves to for their class, as the original does.
+// A block copied verbatim from the archive being updated (its files must be
+// unchanged). Reusing blocks avoids recompressing untouched data.
+struct PreservedBlock {
+    std::string method;
+    std::vector<std::uint8_t> packed;
+    std::uint64_t orig_size = 0;
+    std::vector<std::string> files;  // archive names, in block order
+};
+
 // Writes an archive from entries whose contents are already known.
 bool write_archive(const std::filesystem::path& archive, std::vector<NewEntry> entries,
-                   const AddOptions& options, std::string& error);
+                   const std::vector<PreservedBlock>& preserved, const AddOptions& options,
+                   std::string& error);
+
+inline bool write_archive(const std::filesystem::path& archive, std::vector<NewEntry> entries,
+                          const AddOptions& options, std::string& error)
+{
+    return write_archive(archive, std::move(entries), {}, options, error);
+}
 
 bool create_archive(const std::filesystem::path& archive,
                     const std::vector<std::filesystem::path>& inputs, const AddOptions& options,
