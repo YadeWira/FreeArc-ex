@@ -12,6 +12,7 @@
 #include "fa/crc32.h"
 #include "fa/format.h"
 #include "fa/preset.h"
+#include "fa/update.h"
 
 namespace {
 
@@ -33,6 +34,9 @@ void print_usage(std::FILE* out)
                  "\n"
                  "Commands (M1):\n"
                  "  a        add files to a new archive\n"
+                 "  u        add new files and replace changed ones\n"
+                 "  f        replace changed files (no new entries)\n"
+                 "  d        delete entries (name or wildcard)\n"
                  "             -mMETHOD   compression: 0/storing or lzma[:DICT]\n"
                  "  l        list archive contents\n"
                  "  lb       bare list of file names\n"
@@ -235,8 +239,8 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    if (command == "a") {
-        // a archive[.arc] path... [-mMETHOD]
+    if (command == "a" || command == "u" || command == "f" || command == "d") {
+        // a/u/f/d archive[.arc] path... [-mMETHOD]
         std::string archive;
         std::vector<std::filesystem::path> inputs;
         fa::AddOptions options;
@@ -261,7 +265,9 @@ int main(int argc, char** argv)
             }
         }
         if (archive.empty() || inputs.empty()) {
-            std::fprintf(stderr, "arc-ex: usage: arc-ex a archive.arc path... [-mMETHOD]\n");
+            std::fprintf(stderr,
+                         "arc-ex: usage: arc-ex %.1s archive.arc path... [-mMETHOD]\n",
+                         command.data());
             return 2;
         }
         if (!method_given) options.method = "lzma";
@@ -290,11 +296,20 @@ int main(int argc, char** argv)
         options.table = &table;
         options.classes = &classes;
 
-        if (!fa::create_archive(archive, inputs, options, error)) {
+        const bool created =
+            command == "a"
+                ? fa::create_archive(archive, inputs, options, error)
+                : fa::update_archive(archive, inputs,
+                                     command == "u"   ? fa::UpdateMode::Update
+                                     : command == "f" ? fa::UpdateMode::Freshen
+                                                      : fa::UpdateMode::Delete,
+                                     options, error);
+        if (!created) {
             std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
             return 1;
         }
-        std::printf("Archive created: %s\n", archive.c_str());
+        std::printf(command == "a" ? "Archive created: %s\n" : "Archive updated: %s\n",
+                    archive.c_str());
         return 0;
     }
 

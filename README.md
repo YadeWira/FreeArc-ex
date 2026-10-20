@@ -10,9 +10,10 @@ reads and writes archives using any method it implements (`lzma`, `rep`, `4x4`,
 of them, with `arc.exe` 0.67.1 as the oracle in both directions. Presets `-m0`..`-m9` resolve
 through FreeArc's definition table and `arc.groups` classes, with one solid block
 per resolved method, including the PPMd-based text chains on every target (the
-32-bit heap layout is emulated on 64-bit). LZ4 is pending its 1.10 update and
-fails with a clear error. Update, encryption and the GTK3 GUI follow; see
-[`docs/PLAN.md`](docs/PLAN.md).
+32-bit heap layout is emulated on 64-bit). `u`, `f` and `d` update archives
+(a full rewrite for now, block reuse comes with the solid-block work). LZ4 is
+pending its 1.10 update and fails with a clear error. Encryption, `arc.ini`+Lua
+and the GTK3 GUI follow; see [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Targets
 

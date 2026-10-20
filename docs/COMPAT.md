@@ -84,8 +84,11 @@ as each fix lands with its test.
   limited to the block size. Binary presets work end to end. **Text presets
   (4t/5t and above) are blocked by PPMd**, so a tree with `.txt` files currently
   stops with a clear error instead of writing a wrong archive.
-- Commands: `a`, `l`, `lb`, `t`, `x`. No update (`u`/`f`/`d`), no masks or
-  selective extraction, no overwrite policy.
+- Commands: `a`, `u`, `f`, `d`, `l`, `lb`, `t`, `x`. Update **rewrites the
+  archive and recompresses every block** (correct, but it does not reuse old
+  blocks the way `arc.exe` does, and the block layout therefore differs); block
+  reuse is the next optimisation. No masks or selective extraction, no
+  overwrite policy.
 - Creation writes a single solid data block and stores the directory
   uncompressed; splitting and `-dm` methods arrive later in M2.
 - Reading is memory-mapped; creation still reads each file into memory, so very

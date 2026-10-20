@@ -66,6 +66,10 @@ public:
 
     const ArchiveInfo& info() const { return info_; }
 
+    // Releases the mapping. Needed before rewriting an archive in place: on
+    // Windows a mapped file cannot be opened for writing (sharing violation).
+    void close() { file_ = MappedFile{}; }
+
     // Decompresses data block `index` into exactly its original size.
     bool read_data_block(std::size_t index, std::vector<std::uint8_t>& out,
                          std::string& error) const;

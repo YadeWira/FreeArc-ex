@@ -17,16 +17,7 @@
 namespace fa {
 namespace {
 
-struct Entry {
-    std::string name;  // full path inside the archive, '/'-separated
-    std::string base;  // last component
-    std::string dir;   // parent directory, "" for the root
-    bool is_dir = false;
-    std::uint64_t size = 0;
-    std::int32_t mtime = 0;
-    std::uint32_t crc = 0;
-    std::vector<std::uint8_t> data;
-};
+using Entry = NewEntry;
 
 void put_u32(std::vector<std::uint8_t>& out, std::uint32_t value)
 {
@@ -147,6 +138,15 @@ std::vector<std::uint8_t> make_descriptor(std::uint32_t type, const std::string&
 
 }  // namespace
 
+static bool write_entries(const std::filesystem::path& archive, std::vector<Entry> entries,
+                          const AddOptions& options, std::string& error);
+
+bool write_archive(const std::filesystem::path& archive, std::vector<NewEntry> entries,
+                   const AddOptions& options, std::string& error)
+{
+    return write_entries(archive, std::move(entries), options, error);
+}
+
 bool create_archive(const std::filesystem::path& archive,
                     const std::vector<std::filesystem::path>& inputs, const AddOptions& options,
                     std::string& error)
@@ -163,6 +163,25 @@ bool create_archive(const std::filesystem::path& archive,
     if (entries.empty()) {
         error = "nothing to add";
         return false;
+    }
+    return write_entries(archive, std::move(entries), options, error);
+}
+
+static bool write_entries(const std::filesystem::path& archive, std::vector<Entry> entries,
+                          const AddOptions& options, std::string& error)
+{
+    if (entries.empty()) {
+        error = "nothing to add";
+        return false;
+    }
+
+    // Derived fields: the caller may have built entries directly (update).
+    for (auto& entry : entries) {
+        const std::size_t slash = entry.name.rfind('/');
+        entry.base = (slash == std::string::npos) ? entry.name : entry.name.substr(slash + 1);
+        entry.dir = (slash == std::string::npos) ? "" : entry.name.substr(0, slash);
+        entry.size = entry.data.size();
+        if (!entry.is_dir) entry.crc = crc32(entry.data.data(), entry.data.size());
     }
 
     // Directory table: index 0 is the root, and every parent directory must be

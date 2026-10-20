@@ -72,3 +72,9 @@ add_test(NAME create_ppmd
 add_test(NAME lz4_rejected
          COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/expect_unsupported.sh
                  $<TARGET_FILE:arc-ex> lz4)
+
+foreach(method lzma rep+lzma)
+    add_test(NAME update_${method}
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/update.sh
+                     $<TARGET_FILE:arc-ex> ${method})
+endforeach()
