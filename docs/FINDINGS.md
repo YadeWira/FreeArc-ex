@@ -114,6 +114,19 @@ the 1.10 decoder arrives with the library update).
   `t`. Our own `r` does the same and the result is byte-identical to the
   original before the damage; it also repairs archives written by `arc.exe`.
 
+## Lua events (2026-10-20)
+
+- The original builds, for each event, a tiny dispatcher: `on<Event>(handler)`
+  appends to a list and the event function calls every handler with a params
+  table. Scripts are `arc.*.lua` from the configuration directory, loaded in
+  name order (Options.hs).
+- Events: ProgramStart/Done, CommandStart/Done, ArchiveStart/Done, Error,
+  Warning. Params are strings: `command`, `arcname`, `message`, `exitcode`.
+- The embedded Lua 5.1 in `src/lua` (the same version the original used) is
+  enough; 5.4 would break 5.1-era scripts.
+- A failing handler must not abort the archiver: errors from the Lua call are
+  swallowed (as the original does through its event wrapper).
+
 ## Shared development resources
 
 - Oracle binary: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`

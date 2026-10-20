@@ -16,7 +16,8 @@ grammar. `-p` and `-hp` encrypt archives (AES-256/CTR with PBKDF2, data only or
 data plus headers) in a way `arc.exe` reads, and `-rr` writes a recovery record
 that both `arc.exe` and our own `r` command use to repair damaged sectors. LZ4 is pending its 1.10 update and
 fails with a clear error. The CLI already supports masks, exclusions, overwrite
-policy and FreeArc's exit codes. `arc.ini`+Lua and the GTK3 GUI follow; see
+policy and FreeArc's exit codes, reads the method definitions from `arc.ini` and
+runs `arc.*.lua` event hooks (Lua 5.1). The GTK3 GUI follows; see
 [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Targets

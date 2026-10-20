@@ -10,10 +10,11 @@ add_library(fa_core STATIC
     src/update.cpp
     src/crypto.cpp
     src/repair.cpp
+    src/lua.cpp
     src/preset.cpp
 )
 
 target_include_directories(fa_core PUBLIC include)
 # WHOLE_ARCHIVE: every codec must be linked in so its static initializer runs.
-target_link_libraries(fa_core PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,fa::legacy>)
+target_link_libraries(fa_core PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,fa::legacy> fa_lua)
 add_library(fa::core ALIAS fa_core)

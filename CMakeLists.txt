@@ -32,6 +32,7 @@ if(MINGW)
     add_compile_definitions(_WIN32_WINNT=0x0601 WINVER=0x0601)
 endif()
 
+add_subdirectory(src/lua)
 add_subdirectory(src/codecs)
 add_subdirectory(src/core)
 

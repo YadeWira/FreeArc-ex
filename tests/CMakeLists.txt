@@ -114,3 +114,6 @@ endif()
 
 add_test(NAME cli_features
          COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/cli.sh $<TARGET_FILE:arc-ex>)
+
+add_test(NAME lua_events
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/lua.sh $<TARGET_FILE:arc-ex>)

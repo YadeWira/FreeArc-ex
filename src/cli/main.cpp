@@ -16,6 +16,7 @@
 #include "fa/update.h"
 #include "fa/crypto.h"
 #include "fa/repair.h"
+#include "fa/lua.h"
 
 namespace {
 
@@ -294,7 +295,32 @@ int process_archive(const fa::Archive& archive, const std::string& output_dir, b
 
 }  // namespace
 
+static int run(int argc, char** argv);
+
 int main(int argc, char** argv)
+{
+    std::string command_line;
+    for (int i = 1; i < argc; ++i) {
+        if (i > 1) command_line += ' ';
+        command_line += argv[i];
+    }
+
+    // arc.ini event scripts (arc.*.lua in the working directory).
+    std::string lua_error;
+    const bool lua = fa::lua_init(".", lua_error);
+    if (!lua && !lua_error.empty()) {
+        std::fprintf(stderr, "arc-ex: warning: %s\n", lua_error.c_str());
+    }
+    fa::lua_event("ProgramStart", {{"command", command_line}});
+
+    const int code = run(argc, argv);
+
+    fa::lua_event("ProgramDone", {{"command", command_line}, {"exitcode", std::to_string(code)}});
+    fa::lua_shutdown();
+    return code;
+}
+
+static int run(int argc, char** argv)
 {
     if (argc < 2) {
         print_usage(stderr);
@@ -389,6 +415,7 @@ int main(int argc, char** argv)
         std::string archive;
         std::vector<std::filesystem::path> inputs;
         fa::AddOptions options;
+        std::string cfg_file;
         bool method_given = false;
         for (int i = 2; i < argc; ++i) {
             const std::string_view arg(argv[i]);
@@ -397,6 +424,8 @@ int main(int argc, char** argv)
                 method_given = true;
             } else if (arg.rfind("-dm", 0) == 0) {
                 options.directory_method = std::string(arg.substr(3));
+            } else if (arg.rfind("-cfg", 0) == 0) {
+                cfg_file = std::string(arg.substr(4));
             } else if (arg.rfind("-rr", 0) == 0) {
                 options.recovery = std::string(arg.substr(3));
                 options.recovery_present = true;
@@ -436,6 +465,7 @@ int main(int argc, char** argv)
         static fa::FileClasses classes;
         static fa::MethodTable table;
         std::string error;
+        const std::string config_file = cfg_file.empty() ? "arc.ini" : cfg_file;
         for (const char* candidate : {"arc.groups", "data/arc.groups"}) {
             if (std::filesystem::exists(candidate)) {
                 if (!classes.load(candidate, error)) {
@@ -444,7 +474,7 @@ int main(int argc, char** argv)
                 break;
             }
         }
-        for (const char* candidate : {"arc.ini"}) {
+        for (const std::string& candidate : {config_file}) {
             if (std::filesystem::exists(candidate)) {
                 if (!table.load_ini(candidate, error)) {
                     std::fprintf(stderr, "arc-ex: warning: %s\n", error.c_str());
@@ -455,6 +485,8 @@ int main(int argc, char** argv)
         options.table = &table;
         options.classes = &classes;
 
+        fa::lua_event("CommandStart", {{"command", std::string(command)}});
+        fa::lua_event("ArchiveStart", {{"arcname", archive}});
         const bool created =
             command == "a"
                 ? fa::create_archive(archive, inputs, options, error)
@@ -467,6 +499,8 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
             return 1;
         }
+        fa::lua_event("ArchiveDone", {{"arcname", archive}});
+        fa::lua_event("CommandDone", {{"command", std::string(command)}});
         std::printf(command == "a" ? "Archive created: %s\n" : "Archive updated: %s\n",
                     archive.c_str());
         return 0;

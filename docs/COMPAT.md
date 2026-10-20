@@ -7,6 +7,7 @@
 | `.arc` format | read and write any archive that FreeArc 0.67.1 reads/writes, including encryption, recovery record, solid blocks and SFX |
 | CLI | same options, same semantics and same exit codes as `arc.exe` 0.67.1 |
 | `arc.ini` + Lua | configuration and events with Lua 5.1, existing scripts unchanged |
+| status | methods table read from `arc.ini` (`-cfg` selects the file); `arc.*.lua` event hooks implemented (Program/Command/Archive Start/Done, Error, Warning) |
 | SFX / `unarc.dll` | self-extracting modules and the callback DLL, Windows only |
 | Explorer | COM context menu (x86 and x64) and file associations, Windows only |
 | Containers | reading `.7z`/`.zip`/`.rar` (writing `.zip` if agreed) |
