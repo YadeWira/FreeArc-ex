@@ -111,7 +111,8 @@ the 1.10 decoder arrives with the library update).
   (`4%` of ~108 KB gave 512-byte sectors and 7 recovery sectors).
 - Verified end to end: `arc.exe` reports "7 recovery sectors (3584 bytes)", and
   after corrupting 512 bytes it repairs the archive and the repaired copy passes
-  `t`.
+  `t`. Our own `r` does the same and the result is byte-identical to the
+  original before the damage; it also repairs archives written by `arc.exe`.
 
 ## Shared development resources
 

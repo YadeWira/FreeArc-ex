@@ -15,6 +15,7 @@
 #include "fa/method.h"
 #include "fa/update.h"
 #include "fa/crypto.h"
+#include "fa/repair.h"
 
 namespace {
 
@@ -87,6 +88,8 @@ void print_usage(std::FILE* out)
                  "  u        add new files and replace changed ones\n"
                  "  f        replace changed files (no new entries)\n"
                  "  d        delete entries (name or wildcard)\n"
+                 "  r        repair a damaged archive using its recovery record\n"
+                 "             [output]  default: fixed.<archive>\n"
                  "             -mMETHOD   compression: 0/storing or lzma[:DICT]\n"
                  "  l        list archive contents\n"
                  "  lb       bare list of file names\n"
@@ -287,6 +290,46 @@ int main(int argc, char** argv)
         std::printf("sfx_size=%llu locked=%d\n",
                     static_cast<unsigned long long>(info.sfx_size), info.locked ? 1 : 0);
         return 0;
+    }
+
+    if (command == "r") {
+        std::string archive;
+        std::string output;
+        for (int i = 2; i < argc; ++i) {
+            const std::string_view arg(argv[i]);
+            if (arg.rfind("-hp", 0) == 0) {
+                fa::set_password(std::string(arg.substr(3)));
+            } else if (arg.rfind("-p", 0) == 0 && arg.rfind("-dp", 0) != 0) {
+                fa::set_password(std::string(arg.substr(2)));
+            } else if (!arg.empty() && arg[0] == '-') {
+                std::fprintf(stderr, "arc-ex: unknown option '%.*s'\n",
+                             static_cast<int>(arg.size()), arg.data());
+                return 2;
+            } else if (archive.empty()) {
+                archive = std::string(arg);
+            } else {
+                output = std::string(arg);
+            }
+        }
+        if (archive.empty()) {
+            std::fprintf(stderr, "arc-ex: usage: arc-ex r archive [output]\n");
+            return 2;
+        }
+        if (output.empty()) {
+            output = "fixed." + std::filesystem::path(archive).filename().string();
+        }
+        fa::RepairResult result;
+        std::string error;
+        if (!fa::repair_archive(archive, output, result, error)) {
+            std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
+            return 1;
+        }
+        std::printf("%zu damaged sector(s), %zu repaired", result.damaged, result.repaired);
+        if (result.groups_lost != 0) {
+            std::printf(", %zu group(s) unrecoverable", result.groups_lost);
+        }
+        std::printf("\nRepaired archive saved to %s\n", output.c_str());
+        return result.groups_lost == 0 ? 0 : 2;
     }
 
     if (command == "a" || command == "u" || command == "f" || command == "d") {

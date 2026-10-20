@@ -453,6 +453,24 @@ bool Archive::open(const std::filesystem::path& path, Archive& archive, std::str
     return true;
 }
 
+bool Archive::raw_control_block(std::size_t index, std::vector<std::uint8_t>& out,
+                                std::string& error) const
+{
+    if (index >= info_.blocks.size()) {
+        error = "control block index out of range";
+        return false;
+    }
+    const BlockRef& block = info_.blocks[index];
+    if (block.pos > file_.size() || file_.size() - static_cast<std::size_t>(block.pos) <
+                                        static_cast<std::size_t>(block.comp_size)) {
+        error = "control block out of range";
+        return false;
+    }
+    out.assign(file_.data() + block.pos,
+               file_.data() + block.pos + static_cast<std::size_t>(block.comp_size));
+    return true;
+}
+
 bool Archive::raw_data_block(std::size_t index, std::vector<std::uint8_t>& out,
                              std::string& error) const
 {

@@ -74,6 +74,10 @@ public:
     bool read_data_block(std::size_t index, std::vector<std::uint8_t>& out,
                          std::string& error) const;
 
+    // Raw bytes of a control block (compressed/encrypted as stored).
+    bool raw_control_block(std::size_t index, std::vector<std::uint8_t>& out,
+                           std::string& error) const;
+
     // Raw (still compressed) bytes of a data block, for block reuse on update.
     bool raw_data_block(std::size_t index, std::vector<std::uint8_t>& out,
                         std::string& error) const;
