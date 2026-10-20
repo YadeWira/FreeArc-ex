@@ -67,6 +67,47 @@ bool parse_solid(const std::string& text, std::vector<fa::SolidRule>& rules, std
     return true;
 }
 
+// FreeArc's exit codes (legacy/haskell/Errors.hs).
+constexpr int kExitSuccess = 0;
+constexpr int kExitWarnings = 1;
+constexpr int kExitFatal = 2;
+constexpr int kExitBadPassword = 21;
+
+bool glob_match(const std::string& pattern, const std::string& text)
+{
+    std::size_t p = 0, t = 0, star = std::string::npos, mark = 0;
+    while (t < text.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t])) {
+            ++p;
+            ++t;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            star = p++;
+            mark = t;
+        } else if (star != std::string::npos) {
+            p = star + 1;
+            t = ++mark;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '*') ++p;
+    return p == pattern.size();
+}
+
+std::string basename_of(const std::string& path)
+{
+    const std::size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+bool matches_any(const std::vector<std::string>& masks, const std::string& name)
+{
+    for (const auto& mask : masks) {
+        if (glob_match(mask, name) || glob_match(mask, basename_of(name))) return true;
+    }
+    return false;
+}
+
 constexpr const char* kProgram = "FreeArc-ex";
 constexpr const char* kVersion = "0.1.0";
 constexpr const char* kCompatibleWith = "FreeArc 0.67.1";
@@ -150,7 +191,9 @@ int list_archive(const fa::ArchiveInfo& info)
 }
 
 // Walks the data blocks, checking (and optionally writing) every file.
-int process_archive(const fa::Archive& archive, const std::string& output_dir, bool extract)
+int process_archive(const fa::Archive& archive, const std::string& output_dir, bool extract,
+                    const std::vector<std::string>& masks, const std::vector<std::string>& excludes,
+                    bool overwrite)
 {
     const fa::ArchiveInfo& info = archive.info();
     std::size_t failures = 0;
@@ -161,6 +204,7 @@ int process_archive(const fa::Archive& archive, const std::string& output_dir, b
         std::string error;
         if (!archive.read_data_block(b, data, error)) {
             std::fprintf(stderr, "arc-ex: block %zu: %s\n", b, error.c_str());
+            if (error.find("password") != std::string::npos) return kExitBadPassword;
             ++failures;
             continue;
         }
@@ -168,6 +212,10 @@ int process_archive(const fa::Archive& archive, const std::string& output_dir, b
         const fa::DataBlock& block = info.data_blocks[b];
         for (std::size_t i = 0; i < block.file_count; ++i) {
             const fa::FileEntry& file = info.files[block.first_file + i];
+            if (extract && !file.is_dir) {
+                if (!masks.empty() && !matches_any(masks, file.name)) continue;
+                if (!excludes.empty() && matches_any(excludes, file.name)) continue;
+            }
             if (file.is_dir) {
                 if (extract) {
                     std::error_code ec;
@@ -208,6 +256,10 @@ int process_archive(const fa::Archive& archive, const std::string& output_dir, b
                     ++failures;
                     continue;
                 }
+            }
+            if (!overwrite) {
+                std::error_code exists_ec;
+                if (std::filesystem::exists(target, exists_ec)) continue;  // -o-: keep existing
             }
             std::ofstream out(target, std::ios::binary | std::ios::trunc);
             if (!out) {
@@ -344,7 +396,7 @@ int main(int argc, char** argv)
                 options.method = std::string(arg.substr(2));
                 method_given = true;
             } else if (arg.rfind("-dm", 0) == 0) {
-                // Directory method: stored for now, accepted for CLI compatibility.
+                options.directory_method = std::string(arg.substr(3));
             } else if (arg.rfind("-rr", 0) == 0) {
                 options.recovery = std::string(arg.substr(3));
                 options.recovery_present = true;
@@ -428,6 +480,9 @@ int main(int argc, char** argv)
 
     std::string archive_path;
     std::string output_dir = ".";
+    std::vector<std::string> masks;
+    std::vector<std::string> excludes;
+    bool overwrite = true;
     for (int i = 2; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg.rfind("-hp", 0) == 0) {
@@ -436,17 +491,20 @@ int main(int argc, char** argv)
             fa::set_password(std::string(arg.substr(2)));
         } else if (arg.rfind("-dp", 0) == 0) {
             output_dir = std::string(arg.substr(3));
-        } else if (arg == "-o+" || arg == "-o-") {
-            // Overwrite policy: accepted for CLI compatibility, extraction always overwrites.
+        } else if (arg.rfind("-x", 0) == 0 && arg.size() > 2) {
+            excludes.emplace_back(arg.substr(2));
+        } else if (arg == "-o-") {
+            overwrite = false;
+        } else if (arg == "-o+" || arg == "-y") {
+            overwrite = true;
         } else if (!arg.empty() && arg[0] == '-') {
             std::fprintf(stderr, "arc-ex: unknown option '%.*s'\n", static_cast<int>(arg.size()),
                          arg.data());
-            return 2;
+            return kExitFatal;
         } else if (archive_path.empty()) {
             archive_path = std::string(arg);
         } else {
-            std::fprintf(stderr, "arc-ex: selecting individual files is not implemented yet\n");
-            return 2;
+            masks.emplace_back(arg);
         }
     }
 
@@ -465,7 +523,7 @@ int main(int argc, char** argv)
     std::string error;
     if (!fa::Archive::open(archive_path, archive, error)) {
         std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
-        return 1;
+        return error.find("password") != std::string::npos ? kExitBadPassword : kExitFatal;
     }
 
     if (command == "l") return list_archive(archive.info());
@@ -475,5 +533,5 @@ int main(int argc, char** argv)
         }
         return 0;
     }
-    return process_archive(archive, output_dir, command == "x");
+    return process_archive(archive, output_dir, command == "x", masks, excludes, overwrite);
 }

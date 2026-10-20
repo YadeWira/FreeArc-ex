@@ -111,3 +111,6 @@ else()
     add_test(NAME recovery
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/recovery.sh $<TARGET_FILE:arc-ex>)
 endif()
+
+add_test(NAME cli_features
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/cli.sh $<TARGET_FILE:arc-ex>)

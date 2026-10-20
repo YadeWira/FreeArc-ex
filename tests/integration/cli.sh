@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# CLI behaviour: masks, -x exclusions, overwrite policy, -dm and exit codes.
+# Usage: cli.sh <arc-ex>
+set -euo pipefail
+
+arc_ex=$(realpath "$1")
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/fa-cli.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+cd "$tmp"
+
+mkdir -p src/sub
+printf 'a\n' >src/a.txt
+printf 'b\n' >src/b.bin
+printf 'c\n' >src/sub/c.txt
+
+# -dm: the directory block is compressed, and the archive still verifies.
+"$arc_ex" a d.arc src -mlzma -dmlzma >/dev/null
+"$arc_ex" lt d.arc | grep 'type=3' | grep -q 'lzma' || { echo "FAIL: -dm ignored"; exit 1; }
+"$arc_ex" t d.arc >/dev/null
+
+# Include masks select by name (full path or basename).
+mkdir out_mask
+"$arc_ex" x d.arc -dpout_mask '*.txt' >/dev/null
+test -f out_mask/src/a.txt && test -f out_mask/src/sub/c.txt
+test ! -f out_mask/src/b.bin || { echo "FAIL: mask extracted a non-matching file"; exit 1; }
+
+# -x excludes.
+mkdir out_ex
+"$arc_ex" x d.arc -dpout_ex -x'*.txt' >/dev/null
+test -f out_ex/src/b.bin
+test ! -f out_ex/src/a.txt || { echo "FAIL: -x did not exclude"; exit 1; }
+
+# Overwrite policy.
+mkdir out_ow
+"$arc_ex" x d.arc -dpout_ow >/dev/null
+printf 'keep me\n' >out_ow/src/a.txt
+"$arc_ex" x d.arc -dpout_ow -o- >/dev/null
+grep -q 'keep me' out_ow/src/a.txt || { echo "FAIL: -o- overwrote"; exit 1; }
+"$arc_ex" x d.arc -dpout_ow -o+ >/dev/null
+grep -q 'keep me' out_ow/src/a.txt && { echo "FAIL: -o+ did not overwrite"; exit 1; }
+
+# Exit code for a wrong password (21, as the original).
+"$arc_ex" a enc.arc src -mlzma -pclave >/dev/null
+set +e
+"$arc_ex" t enc.arc -pmala >/dev/null 2>&1
+code=$?
+set -e
+if [ "$code" -ne 21 ]; then
+    echo "FAIL: wrong password exit code $code, expected 21"
+    exit 1
+fi
+
+echo "cli OK"

@@ -606,12 +606,39 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     };
     std::vector<std::uint8_t> dir_data = build_dir_data_full();
 
-    std::vector<std::uint8_t> dir_stored;
-    std::string dir_method;
-    if (!prepare_control_block(dir_data, options.header_encryption, dir_stored, dir_method,
-                               error)) {
-        return false;
+    // Directory: stored by default, compressed when -dm asks for it and then
+    // optionally encrypted (-hp).
+    std::vector<std::uint8_t> dir_encoded = dir_data;
+    std::string dir_method = "storing";
+    if (!options.directory_method.empty() && options.directory_method != "0" &&
+        options.directory_method != "storing") {
+        std::string limited;
+        if (!codec_limit_dictionary(options.directory_method,
+                                    dir_data.size() + dir_data.size() / 100 + 512, limited,
+                                    error)) {
+            return false;
+        }
+        if (!codec_compress(limited, dir_data.data(), dir_data.size(), dir_encoded, error)) {
+            return false;
+        }
+        dir_method = limited;
     }
+    std::vector<std::uint8_t> dir_stored;
+    std::string dir_stored_method;
+    if (options.header_encryption) {
+        std::string with_key;
+        std::string stored_stage;
+        if (!make_encryption_stage(256, password(), with_key, stored_stage, error)) return false;
+        if (!codec_compress(dir_method + "+" + with_key, dir_data.data(), dir_data.size(),
+                            dir_stored, error)) {
+            return false;
+        }
+        dir_stored_method = dir_method + "+" + stored_stage;
+    } else {
+        dir_stored = dir_encoded;
+        dir_stored_method = dir_method;
+    }
+    dir_method = dir_stored_method;
     const auto dir_descr =
         make_descriptor(kDirBlock, dir_method, dir_data.size(), dir_stored.size(),
                         crc32(dir_data.data(), dir_data.size()));
