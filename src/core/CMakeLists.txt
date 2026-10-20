@@ -5,10 +5,11 @@ add_library(fa_core STATIC
     src/mapped_file.cpp
     src/method.cpp
     src/decompress.cpp
-    src/lzma_encode.cpp
+    src/codec.cpp
     src/arc_writer.cpp
 )
 
 target_include_directories(fa_core PUBLIC include)
-target_link_libraries(fa_core PRIVATE fa::codecs)
+# WHOLE_ARCHIVE: every codec must be linked in so its static initializer runs.
+target_link_libraries(fa_core PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,fa::legacy>)
 add_library(fa::core ALIAS fa_core)

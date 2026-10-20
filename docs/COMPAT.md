@@ -60,7 +60,7 @@ as each fix lands with its test.
 | 1 | Cancelling an update leaves a half-written archive in place of the original | high | pending (M2) |
 | 2 | Paths over 260 characters are skipped silently (and with `-d` they are still deleted) | high | pending (M2) |
 | 3 | 2012 LZ4 with CVE-2014-4611 | high | pending (M4) |
-| 4 | PPMd/GRZip/TTA/REP with 32-bit assumptions | high | pending (M2/M3) |
+| 4 | PPMd/GRZip/TTA/REP with 32-bit assumptions | high | partially: GRZip/TTA/MM/REP work on 64-bit with this engine; PPMd still truncated (guarded) |
 | 5 | Dates above 2038 and below 1970 stored incorrectly | medium | pending (M2) |
 | 6 | No system RNG on Windows for salts/IVs | medium | pending (M2) |
 | 7 | Creating an SFX deletes the original `.arc` | medium | pending (M6) |
@@ -68,17 +68,24 @@ as each fix lands with its test.
 | 9 | On CRC failure the extracted file is left truncated | medium | pending (M2) |
 | 10 | `arc a a.log new.arc` (swapped arguments) deletes `a.log` | high | pending (M1) |
 
-## Current limitations (M1)
+## Current limitations (M2, in progress)
 
-- Methods: `storing` and a single `lzma` stage. Chains (`rep+exe+lzma`,
-  `4x4+tor`, ...) are rejected with a clear error, never decoded incorrectly.
+- **Methods**: the whole legacy engine is linked in, so `lzma`, `rep`, `4x4`,
+  `tor`, `dict`, `lzp`, `grzip`, `tta`, `mm`, `delta`, `exe`, `dispack070` and
+  arbitrary chains of them (`rep:96m+lzma:8mb`, `exe+lzma:16mb`, ...) work in
+  both directions.
+- **Known gaps**: `ppmd` (FreeArc's patched PPMd returns truncated output on both
+  architectures: needs its own 32-bit-layout fix) and `lz4` (the 2012 codec
+  rejects real blocks with error -7; the 1.10 decoder comes with the library
+  update). Both are rejected with a clear error instead of crashing or
+  producing garbage.
 - Commands: `a`, `l`, `lb`, `t`, `x`. No update (`u`/`f`/`d`), no masks or
-  selective extraction, no overwrite policy.
+  selective extraction, no overwrite policy, no presets (`-m1`..`-m9` need the
+  per-filetype logic from M2).
 - Creation writes a single solid data block and stores the directory
-  uncompressed; splitting and `-dm` methods arrive with M2.
-- Reading is memory-mapped (a 4 GiB archive does not need 4 GiB of RAM), but
-  creation still reads each file into memory, so very large inputs are limited by
-  available RAM.
+  uncompressed; splitting and `-dm` methods arrive later in M2.
+- Reading is memory-mapped; creation still reads each file into memory, so very
+  large inputs are limited by available RAM.
 
 ## What is NOT promised
 

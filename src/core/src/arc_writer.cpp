@@ -6,9 +6,10 @@
 #include <fstream>
 
 #include "fa/arc.h"
+#include "fa/codec.h"
 #include "fa/crc32.h"
 #include "fa/format.h"
-#include "fa/lzma_encode.h"
+
 #include "fa/method.h"
 #include "fa/vint.h"
 
@@ -143,11 +144,6 @@ std::vector<std::uint8_t> make_descriptor(std::uint32_t type, const std::string&
     return out;
 }
 
-std::uint32_t dictionary_for(std::size_t size)
-{
-    return lzma_dictionary_for(size);
-}
-
 }  // namespace
 
 bool create_archive(const std::filesystem::path& archive,
@@ -179,22 +175,10 @@ bool create_archive(const std::filesystem::path& archive,
     if (options.method == "storing" || options.method == "0" || plain.empty()) {
         packed = plain;
     } else {
-        std::string name;
-        LzmaParams parsed;
-        if (!parse_method(options.method, name, parsed) || name != "lzma") {
-            error = "unsupported compression method '" + options.method +
-                    "' (M1 supports storing and lzma)";
-            return false;
-        }
-        LzmaEncodeParams params;
-        params.dict_size = parsed.dict_size == 64u * 1024u * 1024u
-                               ? dictionary_for(plain.size())
-                               : parsed.dict_size;
-        params.lc = static_cast<unsigned>(parsed.lc);
-        params.lp = static_cast<unsigned>(parsed.lp);
-        params.pb = static_cast<unsigned>(parsed.pb);
-        if (!lzma_compress(plain.data(), plain.size(), params, packed, error)) return false;
-        data_method = lzma_method_text(params);
+        data_method = options.method;
+        if (!codec_compress(data_method, plain.data(), plain.size(), packed, error)) return false;
+        // The library may canonicalise the method; keep the text it was given,
+        // which is what the decoder needs.
     }
 
     // Directory data: one data block holding every entry, then column-wise fields.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -22,5 +23,13 @@ bool parse_method(const std::string& method, std::string& name, LzmaParams& lzma
 
 // Parses a FreeArc size ("1mb", "64m", "4096", "2g") into bytes; 0 on error.
 std::uint64_t parse_mem(const std::string& text);
+
+// Method text for an lzma stream encoded with the given dictionary, e.g.
+// "lzma:32kb:normal:32".
+std::string lzma_method_text(std::uint32_t dict_size, unsigned fast_bytes = 32);
+
+// Smallest power of two that covers `size`, between 32 KiB and 64 MiB: the same
+// dictionary choice the original uses.
+std::uint32_t lzma_dictionary_for(std::size_t size);
 
 }  // namespace fa

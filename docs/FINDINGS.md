@@ -20,6 +20,23 @@ testing against the original binary, and dropped `.arc` support and its GUI, so
 | `arc.ini` quoting | The distribution's `arc.ini` uses single quotes around `packcmd`/`unpackcmd` for srep; under wine that breaks the external compressor, with double quotes it works. |
 | Source tree | PArc no longer keeps the full FreeArc 0.67 tree at HEAD (only `reference/freearc-0.67/Compression`); the rest is in its history at commit `82ea8d9`. |
 
+## Legacy codec engine (2026-10-20)
+
+FreeArc's own compression library (`src/codecs`) is used as the codec engine
+instead of reimplementing each codec. Things that mattered:
+
+| topic | finding |
+|---|---|
+| Link | The codecs register themselves through static initializers, so the library must be linked **whole** (`$<LINK_LIBRARY:WHOLE_ARCHIVE>`); a plain static archive drops the methods nobody references by symbol. |
+| Language level | Pinned to C++11 for that target: at C++20 the chain decoder misbehaves. |
+| Method string | The legacy parser **writes into the method string** while splitting it, so it needs a mutable copy (`c_str()` corrupts the caller's string). |
+| 64 bits | Defining `FREEARC_64BIT` fixes the Tornado match finder; the multithreaded match finders store 32-bit pointer deltas, so they are disabled on 64-bit and `MultiThreading.cpp` is compiled separately. |
+| Windows cross | The sources include `<ShObjIdl.h>` and `<Wincrypt.h>` with capitalisation that only works on case-insensitive file systems: `src/codecs/compat/` provides shims. `_UNICODE`/`UNICODE` must be defined. |
+| arm64 | `CPU_Is_Aes_Supported()` is x86-only; declared/defined in `compat/fa_arch_compat.h` and `fa_compat.cpp` as "no AES instructions". |
+| Empty blocks | A data block with orig=0/comp=0 (all entries are directories) must be short-circuited: some codecs reject it. |
+| PPMd | The patched PPMd returns truncated output (both architectures); the encoder segfaults. Guarded. |
+| LZ4 | The bundled 2012 codec rejects real 0.67.1 blocks (error -7). Guarded until the 1.10 update. |
+
 ## Shared development resources
 
 - Oracle binary: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`

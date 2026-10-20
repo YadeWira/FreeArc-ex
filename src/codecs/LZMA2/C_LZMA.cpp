@@ -7,8 +7,11 @@
 #define INITGUID
 #endif
 
-// Enable multithreading support
+// FreeArc-ex: multithreading match finders store 32-bit pointer deltas, so they
+// are only enabled on 32-bit builds (the 64-bit path uses the plain encoder).
+#ifndef FREEARC_64BIT
 #define COMPRESS_MF_MT
+#endif
 
 // Match finder classes
 #define MF_HashChain  0

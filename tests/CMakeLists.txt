@@ -34,12 +34,11 @@ foreach(fixture m0 lzma lzmadir)
                      ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/src.sha256)
 endforeach()
 
-# Archives whose data uses a method chain must fail loudly, not silently.
-add_test(NAME chain_rejected COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-m1.arc)
-set_tests_properties(chain_rejected PROPERTIES WILL_FAIL TRUE)
+# Chain methods (rep+4x4+tor) decode through the legacy engine.
+add_test(NAME chain_decode COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-m1.arc)
 
 # Creation round trip (no external tools needed) for the methods M1 supports.
-foreach(method 0 lzma)
+foreach(method 0 lzma rep+lzma 4x4+lzma)
     add_test(NAME create_${method}
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/create.sh
                      $<TARGET_FILE:arc-ex> ${method})
@@ -50,7 +49,7 @@ endforeach()
 find_program(FA_WINE NAMES wine)
 set(FA_ARC_ORACLE_DEFAULT "/mnt/IA_LAB/agentes/arc/bin/Arc.exe")
 if(FA_WINE AND EXISTS "${FA_ARC_ORACLE_DEFAULT}")
-    foreach(method 0 lzma)
+    foreach(method 0 lzma rep+lzma 4x4+lzma)
         add_test(NAME oracle_reads_ours_${method}
                  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/oracle.sh
                          $<TARGET_FILE:arc-ex> ${FA_ARC_ORACLE_DEFAULT}

@@ -119,4 +119,23 @@ bool parse_method(const std::string& method, std::string& name, LzmaParams& lzma
     return true;
 }
 
+
+std::string lzma_method_text(std::uint32_t dict_size, unsigned fast_bytes)
+{
+    std::string unit;
+    if (dict_size % (1024u * 1024u) == 0) {
+        unit = std::to_string(dict_size / (1024u * 1024u)) + "mb";
+    } else {
+        unit = std::to_string(dict_size / 1024u) + "kb";
+    }
+    return "lzma:" + unit + ":normal:" + std::to_string(fast_bytes);
+}
+
+std::uint32_t lzma_dictionary_for(std::size_t size)
+{
+    std::uint32_t dict = 32u * 1024u;
+    while (dict < size && dict < 64u * 1024u * 1024u) dict <<= 1;
+    return dict;
+}
+
 }  // namespace fa
