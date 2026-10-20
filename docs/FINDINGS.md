@@ -86,8 +86,12 @@ the 1.10 decoder arrives with the library update).
   so no new crypto code was needed.
 - A wrong password is detected by comparing the derived check-code with `:c`
   before touching the data.
-- `-hp` (header encryption) additionally encrypts the header/directory and puts
-  `:s/:c/:i` in the plaintext footer; not implemented yet.
+- `-hp` (header encryption) encrypts the HEADER and DIR blocks as well, each with
+  its own salt/IV, and the footer's block list keeps the keyless stage
+  (`:s/:c/:i`) so the reader can derive the key; the footer itself stays
+  readable. Implemented and verified both ways — the descriptor CRC stays the
+  CRC of the *plaintext*, so a bad password fails on the check-code before any
+  CRC check.
 
 ## Shared development resources
 

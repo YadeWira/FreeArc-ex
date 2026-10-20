@@ -303,9 +303,8 @@ int main(int argc, char** argv)
             } else if (arg.rfind("-dm", 0) == 0) {
                 // Directory method: stored for now, accepted for CLI compatibility.
             } else if (arg.rfind("-hp", 0) == 0) {
-                std::fprintf(stderr,
-                             "arc-ex: header encryption (-hp) is not implemented yet\n");
-                return 2;
+                fa::set_password(std::string(arg.substr(3)));
+                options.header_encryption = true;
             } else if (arg.rfind("-p", 0) == 0) {
                 fa::set_password(std::string(arg.substr(2)));
             } else if (arg.rfind("-s", 0) == 0) {
@@ -385,7 +384,9 @@ int main(int argc, char** argv)
     std::string output_dir = ".";
     for (int i = 2; i < argc; ++i) {
         const std::string_view arg(argv[i]);
-        if (arg.rfind("-p", 0) == 0 && arg.rfind("-dp", 0) != 0) {
+        if (arg.rfind("-hp", 0) == 0) {
+            fa::set_password(std::string(arg.substr(3)));
+        } else if (arg.rfind("-p", 0) == 0 && arg.rfind("-dp", 0) != 0) {
             fa::set_password(std::string(arg.substr(2)));
         } else if (arg.rfind("-dp", 0) == 0) {
             output_dir = std::string(arg.substr(3));

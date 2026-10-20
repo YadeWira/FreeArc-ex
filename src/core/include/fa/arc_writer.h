@@ -36,6 +36,7 @@ struct AddOptions {
     const MethodTable* table = nullptr;     // required for presets/names
     const FileClasses* classes = nullptr;   // file classification (arc.groups)
     std::vector<SolidRule> solid{SolidRule{}};  // default: one block per method
+    bool header_encryption = false;             // -hp: also encrypt the header and directory
 };
 
 // Creates a new archive containing `inputs` (files and/or directories, walked

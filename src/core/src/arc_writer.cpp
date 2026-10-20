@@ -123,6 +123,27 @@ bool add_path(const std::filesystem::path& disk_path, const std::string& name,
     return true;
 }
 
+// Prepares a control block for writing: with -hp it is encrypted with its own
+// salt and IV, and the stored method keeps everything except the key.
+bool prepare_control_block(const std::vector<std::uint8_t>& plain, bool encrypt,
+                           std::vector<std::uint8_t>& stored_data, std::string& stored_method,
+                           std::string& error)
+{
+    if (!encrypt) {
+        stored_data = plain;
+        stored_method = "storing";
+        return true;
+    }
+    std::string with_key;
+    std::string stored_stage;
+    if (!make_encryption_stage(256, password(), with_key, stored_stage, error)) return false;
+    if (!codec_compress("storing+" + with_key, plain.data(), plain.size(), stored_data, error)) {
+        return false;
+    }
+    stored_method = "storing+" + stored_stage;
+    return true;
+}
+
 std::vector<std::uint8_t> make_descriptor(std::uint32_t type, const std::string& method,
                                           std::uint64_t orig, std::uint64_t comp,
                                           std::uint32_t crc)
@@ -414,10 +435,16 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     std::vector<std::uint8_t> header(format::kSignature.begin(), format::kSignature.end());
     header.insert(header.end(), format::kVersionBytes.begin(), format::kVersionBytes.end());
 
-    const auto header_descr = make_descriptor(kHeaderBlock, "storing", header.size(),
-                                              header.size(),
-                                              crc32(header.data(), header.size()));
-    const std::uint64_t header_total = header.size() + header_descr.size();
+    std::vector<std::uint8_t> header_stored;
+    std::string header_method;
+    if (!prepare_control_block(header, options.header_encryption, header_stored, header_method,
+                               error)) {
+        return false;
+    }
+    const auto header_descr =
+        make_descriptor(kHeaderBlock, header_method, header.size(), header_stored.size(),
+                        crc32(header.data(), header.size()));
+    const std::uint64_t header_total = header_stored.size() + header_descr.size();
 
     // Block positions: right after the header, in block order.
     std::uint64_t pos = header_total;
@@ -452,25 +479,31 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     };
     std::vector<std::uint8_t> dir_data = build_dir_data_full();
 
+    std::vector<std::uint8_t> dir_stored;
+    std::string dir_method;
+    if (!prepare_control_block(dir_data, options.header_encryption, dir_stored, dir_method,
+                               error)) {
+        return false;
+    }
     const auto dir_descr =
-        make_descriptor(kDirBlock, "storing", dir_data.size(), dir_data.size(),
+        make_descriptor(kDirBlock, dir_method, dir_data.size(), dir_stored.size(),
                         crc32(dir_data.data(), dir_data.size()));
-    const std::uint64_t before_footer = dir_pos + dir_data.size() + dir_descr.size();
+    const std::uint64_t before_footer = dir_pos + dir_stored.size() + dir_descr.size();
 
     std::vector<std::uint8_t> footer_data;
     write_vint(footer_data, 2);  // HEADER and DIR
     write_vint(footer_data, kHeaderBlock);
-    put_cstr(footer_data, "storing");
+    put_cstr(footer_data, header_method);
     write_vint(footer_data, before_footer);
     write_vint(footer_data, header.size());
-    write_vint(footer_data, header.size());
+    write_vint(footer_data, header_stored.size());
     put_u32(footer_data, crc32(header.data(), header.size()));
 
     write_vint(footer_data, kDirBlock);
-    put_cstr(footer_data, "storing");
+    put_cstr(footer_data, dir_method);
     write_vint(footer_data, before_footer - dir_pos);
     write_vint(footer_data, dir_data.size());
-    write_vint(footer_data, dir_data.size());
+    write_vint(footer_data, dir_stored.size());
     put_u32(footer_data, crc32(dir_data.data(), dir_data.size()));
 
     footer_data.push_back(0);    // not locked
@@ -493,11 +526,11 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
         return static_cast<bool>(out);
     };
 
-    bool ok = write_bytes(header) && write_bytes(header_descr);
+    bool ok = write_bytes(header_stored) && write_bytes(header_descr);
     for (const auto& block : blocks) {
         ok = ok && write_bytes(block.packed);
     }
-    if (!ok || !write_bytes(dir_data) || !write_bytes(dir_descr) || !write_bytes(footer_data) ||
+    if (!ok || !write_bytes(dir_stored) || !write_bytes(dir_descr) || !write_bytes(footer_data) ||
         !write_bytes(footer_descr)) {
         error = "write error on '" + archive.string() + "'";
         return false;

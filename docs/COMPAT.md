@@ -92,8 +92,9 @@ as each fix lands with its test.
 - **Encryption**: `-p<password>` encrypts the data blocks (AES-256/CTR, 1000
   PBKDF2 iterations), and the same option decrypts; wrong passwords are detected
   through the stored check-code before decrypting. Interoperability verified in
-  both directions with `arc.exe`. Header encryption (`-hp`) is not implemented
-  yet and is rejected with a clear message.
+  both directions with `arc.exe`. `-hp` additionally encrypts the header and the
+  directory (each control block with its own salt/IV; the footer stays readable),
+  so even listing requires the password; verified in both directions.
 - Commands: `a`, `u`, `f`, `d`, `l`, `lb`, `t`, `x`. Update **reuses the blocks
   whose files are all unchanged** (they are copied verbatim, compressed bytes
   included) and recompresses only the affected ones; blocks that gain or lose
