@@ -26,12 +26,7 @@ constexpr int kOutBlockTooSmall = -7;
 //    on both architectures; the 1.10 decoder arrives with the library update.
 bool method_is_unsupported(const std::string& method)
 {
-    bool unsupported = method.find("lz4") != std::string::npos;
-#if UINTPTR_MAX > 0xFFFFFFFFu
-    // PPMd's model is 32-bit only until the heap emulation lands.
-    unsupported = unsupported || method.find("ppmd") != std::string::npos;
-#endif
-    return unsupported;
+    return method.find("lz4") != std::string::npos;
 }
 
 std::string describe(int code)

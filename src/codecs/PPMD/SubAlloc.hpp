@@ -8,10 +8,32 @@
 enum { UNIT_SIZE=12, N1=4, N2=4, N3=4, N4=(128+3-1*N1-2*N2-3*N3)/4,
         N_INDEXES=N1+N2+N3+N4 };
 
+/* FreeArc-ex: 32-bit references. The allocator links heap blocks through these
+ * fields, so they must be 4 bytes like the model references; the heap is mapped
+ * below 4 GiB (see fa_alloc_low). */
+template <class T>
+struct _PACK_ATTR fa_ptr32 {
+    DWORD addr;
+    T* get() const { return (T*)(uintptr_t)addr; }
+    T* operator->() const { return get(); }
+    operator T*() const { return get(); }
+    fa_ptr32& operator=(T* p)
+    {
+#ifdef FA_PPMD_CHECK_PTR32
+        if (p && ((uintptr_t)p >> 32) != 0) {
+            fprintf(stderr, "PPMd: pointer outside the 32-bit arena: %p\n", (void*)p);
+            abort();
+        }
+#endif
+        addr = (DWORD)(uintptr_t)p;
+        return *this;
+    }
+};
+
 #pragma pack(1)
 static _THREAD1 struct BLK_NODE {
     DWORD Stamp;
-    BLK_NODE* next;
+    fa_ptr32<BLK_NODE> next;
     BOOL   avail()      const { return (next != NULL); }
     void    link(BLK_NODE* p) { p->next=next; next=p; }
     void  unlink()            { next=next->next; }
@@ -57,16 +79,50 @@ DWORD _STDCALL GetUsedMemory()
             RetVal -= UNIT_SIZE*Indx2Units[i]*BList[i].Stamp;
     return RetVal;
 }
+/* FreeArc-ex: the PPMd model stores 32-bit pointers, so on 64-bit targets the
+ * heap must be addressable with 32 bits. It is mapped at a fixed low address;
+ * if that fails, the fallback is checked against the 4 GiB limit. */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(_M_ARM64)
+#define FA_PPMD_LOW_HEAP 1
+#endif
+
+#ifdef FA_PPMD_LOW_HEAP
+#if defined(_WIN32)
+static BYTE* fa_alloc_low(UINT size)
+{
+    return (BYTE*) VirtualAlloc((void*)(uintptr_t)0x10000000, size,
+                                MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+}
+static void fa_free_low(BYTE* p, UINT) { if (p) VirtualFree(p, 0, MEM_RELEASE); }
+#else
+static BYTE* fa_alloc_low(UINT size)
+{
+    void* p = mmap((void*)(uintptr_t)0x10000000, size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (p != MAP_FAILED) return (BYTE*)p;
+    p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+    if ((uintptr_t)p + size > (uintptr_t)0x100000000ULL) { munmap(p, size); return NULL; }
+    return (BYTE*)p;
+}
+static void fa_free_low(BYTE* p, UINT size) { if (p) munmap(p, size); }
+#endif
+#else
+static BYTE* fa_alloc_low(UINT size) { return (BYTE*) BigAlloc(size); }
+static void fa_free_low(BYTE* p, UINT size) { if (p) BigFree(p); }
+#endif
+
 void _STDCALL StopSubAllocator() {
     if ( SubAllocatorSize ) {
-        SubAllocatorSize=0;                 BigFree(HeapStart);
+        fa_free_low(HeapStart, SubAllocatorSize);
+        SubAllocatorSize=0;
     }
 }
 BOOL _STDCALL StartSubAllocator(UINT t)
 {
     if (SubAllocatorSize == t)              return TRUE;
     StopSubAllocator();
-    HeapStart = (BYTE*) BigAlloc(t);
+    HeapStart = fa_alloc_low(t);
     if (HeapStart == NULL)                  return FALSE;
     SubAllocatorSize=t;                     return TRUE;
 }

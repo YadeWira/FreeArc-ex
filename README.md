@@ -9,10 +9,9 @@ reads and writes archives using any method it implements (`lzma`, `rep`, `4x4`,
 `tor`, `dict`, `lzp`, `grzip`, `tta`, `mm`, `delta`, `exe`, `dispack`) and chains
 of them, with `arc.exe` 0.67.1 as the oracle in both directions. Presets `-m0`..`-m9` resolve
 through FreeArc's definition table and `arc.groups` classes, with one solid block
-per resolved method; on 32-bit builds they include the PPMd-based text chains.
-PPMd is 32-bit only for now (its model is built on 32-bit pointer layout) and
-LZ4 is pending its 1.10 update; both fail with a clear error on the targets where
-they are not available. Update, encryption and the GTK3 GUI follow; see
+per resolved method, including the PPMd-based text chains on every target (the
+32-bit heap layout is emulated on 64-bit). LZ4 is pending its 1.10 update and
+fails with a clear error. Update, encryption and the GTK3 GUI follow; see
 [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Targets

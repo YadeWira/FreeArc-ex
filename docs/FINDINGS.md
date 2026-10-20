@@ -48,50 +48,32 @@ instead of reimplementing each codec. Things that mattered:
 | ABI | `MemSize` is `size_t`: declaring the entry point with `uint64_t` works on x86-64 but corrupts the stack on i686 (crash inside `ShowCompressionMethod`). |
 | Block order | The directory assumes each block's files are **contiguous** in the file list. Grouping by class without reordering the entries produces archives that look fine and decode wrong. |
 
-## PPMd: 32-bit works, 64-bit open (2026-10-20)
+## PPMd on 64-bit (solved, 2026-10-20)
 
-**The 32-bit failure was strict aliasing, not PPMd.** The codecs do heavy type
-punning (`(DWORD*)pc1`, `(WORD&)s1`, `(STATE&)SummFreq`) and GCC at `-O2` or
-above miscompiles PPMd decompression when strict aliasing is on: it returns a
-few correct bytes and then diverges, which looked like a format problem. With
-`-fno-strict-aliasing` (now mandatory for the legacy codec target):
+Two independent defects made PPMd look "32-bit only":
 
-- i686 decodes a reference `ppmd` archive **byte-exactly** (sha256 of the block
-  matches the extraction done by `arc.exe`);
-- i686 compresses with `ppmd` and `Arc.exe t` accepts the archive;
-- text presets (`-m4`, which end in `ppmd`) work on i686.
+1. **Strict aliasing (both architectures).** The codecs pun pointers heavily
+   (`(DWORD*)pc1`, `(WORD&)s1`, `(STATE&)SummFreq`) and GCC at `-O2` or above
+   miscompiles PPMd decompression when strict aliasing is on: it produces a few
+   correct bytes and then diverges. The legacy codec target is now built with
+   `-fno-strict-aliasing` (mandatory).
+2. **32-bit layout.** The model requires `PPM_CONTEXT` to be 12 bytes and
+   `STATE` 6 bytes, because the allocator hands out 12-byte units and
+   `oneState()` overlays a state on the context header. On 64-bit builds:
+   - the heap is mapped **below 4 GiB** (`mmap` at `0x10000000`, or `VirtualAlloc`
+     on Windows; a fallback checks the address) so 32-bit references are valid;
+   - all heap references are stored as **32-bit addresses**
+     (`fa_ptr32<T>`): `Successor`, `Stats`, `Suffix` — and also the
+     **allocator's `BLK_NODE::next`**, which was the last piece: an 8-byte link
+     in a 12-byte unit overflowed every free list.
 
-64-bit is still open, for the structural reason below.
+With both fixes PPMd decodes a reference `arc.exe` archive **byte-exactly**
+(sha256 of the block matches the oracle's extraction), compresses archives that
+`Arc.exe t` accepts, and the text presets (`-m4`, which end in `ppmd`) work on
+all five targets.
 
-## PPMd on 64-bit (2026-10-20, open)
-
-FreeArc's PPMd (Dmitry Shkarin's variant, modified) was never made 64-bit safe: it
-crashes on x86-64 in `UpdateModel`/`CreateSuccessors` and the encoder hangs. The
-reason is structural, not a missing cast:
-
-- The sub-allocator hands out **12-byte units** (`UNIT_SIZE`) and the whole model
-  assumes that a `PPM_CONTEXT` fits in one unit and a `STATE` in half of one.
-- With 64-bit pointers those structures are 20 and 18 bytes, so every context
-  overflows its unit.
-- `oneState()` overlays a `STATE` on the context header (`SummFreq`+`Stats`+
-  `Suffix`), which only makes sense with the 32-bit field sizes.
-
-Attempts made and why they are not enough:
-
-1. **Widen `UNIT_SIZE` to 20.** Compiles, but crashes later: state arrays are
-   allocated as `AllocUnits(256/2)` (two states per unit) and other places assume
-   the 12-byte granularity, so the model still overruns.
-2. **Store the references as 32-bit offsets** (`fa_heap_ptr<T>`: `Successor`,
-   `Stats`, `Suffix` become 4 bytes, so `PPM_CONTEXT` is 12 and `STATE` is 6).
-   Decoding stops crashing, but produces wrong bytes after the first few, and the
-   encoder hangs — the emulation is still incomplete (likely the allocator's
-   size math and the `Stats` iteration need the same treatment).
-
-Conclusion: the fix is a port of the 32-bit heap semantics (this is what PArc did
-in Pascal: references as `UInt32` offsets from the heap base, 12-byte units,
-6-byte states). It needs its own work item with a byte-exact test: decode a
-reference `ppmd` archive written by `arc.exe` and compare the whole block, then
-compress with our build and have `arc.exe t` accept it.
+Remaining known gap: `lz4` (the 2012 codec rejects real blocks with error -7;
+the 1.10 decoder arrives with the library update).
 
 ## Shared development resources
 

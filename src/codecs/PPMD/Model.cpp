@@ -28,14 +28,16 @@ static _THREAD1 struct SEE2_CONTEXT { // SEE-contexts for PPM-contexts with mask
         }
     }
 } _THREAD _PACK_ATTR SEE2Cont[24][32], DummySEE2Cont;
+
 static _THREAD1 struct PPM_CONTEXT {        // Notes:
     BYTE NumStats, Flags;                   // 1. NumStats & NumMasked contain
     WORD SummFreq;                          //  number of symbols minus 1
     struct STATE {                          // 2. sizeof(WORD) > sizeof(BYTE)
         BYTE Symbol, Freq;                  // 3. contexts example:
-        PPM_CONTEXT* Successor;             // MaxOrder:
-    } _PACK_ATTR * Stats;                   //  ABCD    context
-    PPM_CONTEXT* Suffix;                    //   BCD    suffix
+        fa_ptr32<PPM_CONTEXT> Successor;    // MaxOrder:
+    } _PACK_ATTR;
+    fa_ptr32<STATE> Stats;                  //  ABCD    context
+    fa_ptr32<PPM_CONTEXT> Suffix;           //   BCD    suffix
     inline void encodeBinSymbol(int symbol);//   BCDE   successor
     inline void   encodeSymbol1(int symbol);// other orders:
     inline void   encodeSymbol2(int symbol);//   BCD    context
@@ -51,6 +53,9 @@ static _THREAD1 struct PPM_CONTEXT {        // Notes:
     PPM_CONTEXT*  removeBinConts(int Order);
     STATE& oneState() const { return (STATE&) SummFreq; }
 } _THREAD _PACK_ATTR* MaxContext;
+static_assert(sizeof(PPM_CONTEXT) == 12, "PPM_CONTEXT must keep the 12-byte layout");
+static_assert(sizeof(PPM_CONTEXT::STATE) == 6, "STATE must keep the 6-byte layout");
+static_assert(sizeof(fa_ptr32<int>) == 4, "32-bit references");
 #pragma pack()
 
 static BYTE NS2BSIndx[256], QTable[260];    // constants
@@ -146,7 +151,7 @@ PPM_CONTEXT* PPM_CONTEXT::cutOff(int Order)
     int i, tmp;
     STATE* p;
     if ( !NumStats ) {
-        if ((BYTE*) (p=&oneState())->Successor >= UnitsStart) {
+        if ((BYTE*) (p=&oneState())->Successor.get() >= UnitsStart) {
             if (Order < MaxOrder)           P_CALL(cutOff);
             else                            p->Successor=NULL;
             if (!p->Successor && Order > O_BOUND)
@@ -159,7 +164,7 @@ REMOVE:     SpecialFreeUnit(this);          return NULL;
     PrefetchData(Stats);
     Stats = (STATE*) MoveUnitsUp(Stats,tmp=(NumStats+2) >> 1);
     for (p=Stats+(i=NumStats);p >= Stats;p--)
-            if ((BYTE*) p->Successor < UnitsStart) {
+            if ((BYTE*) p->Successor.get() < UnitsStart) {
                 p->Successor=NULL;          SWAP(*p,Stats[i--]);
             } else if (Order < MaxOrder)    P_CALL(cutOff);
             else                            p->Successor=NULL;
@@ -179,7 +184,7 @@ PPM_CONTEXT* PPM_CONTEXT::removeBinConts(int Order)
     STATE* p;
     if ( !NumStats ) {
         p=&oneState();
-        if ((BYTE*) p->Successor >= UnitsStart && Order < MaxOrder)
+        if ((BYTE*) p->Successor.get() >= UnitsStart && Order < MaxOrder)
                 P_CALL(removeBinConts);
         else                                p->Successor=NULL;
         if (!p->Successor && (!Suffix->NumStats || Suffix->Flags == 0xFF)) {
@@ -188,7 +193,7 @@ PPM_CONTEXT* PPM_CONTEXT::removeBinConts(int Order)
     }
     PrefetchData(Stats);
     for (p=Stats+NumStats;p >= Stats;p--)
-            if ((BYTE*) p->Successor >= UnitsStart && Order < MaxOrder)
+            if ((BYTE*) p->Successor.get() >= UnitsStart && Order < MaxOrder)
                     P_CALL(removeBinConts);
             else                            p->Successor=NULL;
     return this;
@@ -533,7 +538,7 @@ inline void PPM_CONTEXT::update2(STATE* p)
 }
 inline SEE2_CONTEXT* PPM_CONTEXT::makeEscFreq2()
 {
-    BYTE* pb=(BYTE*) Stats;                 UINT t=2*NumStats;
+    BYTE* pb=(BYTE*) Stats.get();                 UINT t=2*NumStats;
     PrefetchData(pb);                       PrefetchData(pb+t);
     PrefetchData(pb += 2*t);                PrefetchData(pb+t);
     SEE2_CONTEXT* psee2c;
@@ -618,7 +623,7 @@ void _STDCALL EncodeFile(_PPMD_FILE* EncodedFile,_PPMD_FILE* DecodedFile,
             } while (MinContext->NumStats == NumMasked);
             MinContext->encodeSymbol2(c);   ariEncodeSymbol();
         }
-        if (!OrderFall && (BYTE*) FoundState->Successor >= UnitsStart)
+        if (!OrderFall && (BYTE*) FoundState->Successor.get() >= UnitsStart)
                 PrefetchData(MaxContext=FoundState->Successor);
         else {
             UpdateModel(MinContext);        PrefetchData(MaxContext);
@@ -647,7 +652,7 @@ void _STDCALL DecodeFile(_PPMD_FILE* DecodedFile,_PPMD_FILE* EncodedFile,
             MinContext->decodeSymbol2();    ariRemoveSubrange();
         }
         _PPMD_D_PUTC(FoundState->Symbol,DecodedFile);
-        if (!OrderFall && (BYTE*) FoundState->Successor >= UnitsStart)
+        if (!OrderFall && (BYTE*) FoundState->Successor.get() >= UnitsStart)
                 PrefetchData(MaxContext=FoundState->Successor);
         else {
             UpdateModel(MinContext);        PrefetchData(MaxContext);

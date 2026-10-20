@@ -38,7 +38,7 @@ endforeach()
 add_test(NAME chain_decode COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-m1.arc)
 
 # Creation round trip (no external tools needed) for the methods M1 supports.
-foreach(method 0 lzma rep+lzma 4x4+lzma)
+foreach(method 0 lzma rep+lzma 4x4+lzma ppmd:8:32mb)
     add_test(NAME create_${method}
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/create.sh
                      $<TARGET_FILE:arc-ex> ${method})
@@ -49,7 +49,7 @@ endforeach()
 find_program(FA_WINE NAMES wine)
 set(FA_ARC_ORACLE_DEFAULT "/mnt/IA_LAB/agentes/arc/bin/Arc.exe")
 if(FA_WINE AND EXISTS "${FA_ARC_ORACLE_DEFAULT}")
-    foreach(method 0 lzma rep+lzma 4x4+lzma)
+    foreach(method 0 lzma rep+lzma 4x4+lzma ppmd:8:32mb)
         add_test(NAME oracle_reads_ours_${method}
                  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/oracle.sh
                          $<TARGET_FILE:arc-ex> ${FA_ARC_ORACLE_DEFAULT}
@@ -62,15 +62,13 @@ target_link_libraries(preset_test PRIVATE fa::core)
 add_test(NAME preset COMMAND preset_test)
 set_tests_properties(preset PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-# PPMd: works on 32-bit after the strict-aliasing fix; on 64-bit it is still
-# rejected until the 32-bit heap layout is ported (docs/FINDINGS.md).
-if(CMAKE_SIZEOF_VOID_P EQUAL 4)
-    add_test(NAME ppmd_decode COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-ppmd.arc)
-else()
-    add_test(NAME ppmd_decode
-             COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-ppmd.arc)
-    set_tests_properties(ppmd_decode PROPERTIES WILL_FAIL TRUE)
-    add_test(NAME ppmd_create_rejected
-             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/expect_unsupported.sh
-                     $<TARGET_FILE:arc-ex> ppmd:8:32mb)
-endif()
+# PPMd: 32-bit layout emulated on 64-bit (low heap + 32-bit references).
+add_test(NAME ppmd_decode COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-ppmd.arc)
+add_test(NAME create_ppmd
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/create.sh
+                 $<TARGET_FILE:arc-ex> ppmd:8:32mb)
+
+# LZ4 is still pending its 1.10 update: creation must fail cleanly.
+add_test(NAME lz4_rejected
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/expect_unsupported.sh
+                 $<TARGET_FILE:arc-ex> lz4)
