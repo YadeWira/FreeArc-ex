@@ -4,8 +4,10 @@ Extended support for [FreeArc 0.67](https://sourceforge.net/projects/freearc/):
 a maintained version of the archiver with new platforms, updated libraries,
 bug fixes and a GTK3 GUI.
 
-**Status: M0 (scaffolding).** It does not archive or extract anything yet; the
-milestone plan is in [`docs/PLAN.md`](docs/PLAN.md).
+**Status: M1 in progress (read side).** `arc-ex l` lists real archives created by
+`arc.exe` when the directory is stored uncompressed (`-dm0`); compressed control
+blocks, creation and extraction are the next steps. The milestone plan is in
+[`docs/PLAN.md`](docs/PLAN.md).
 
 ## Targets
 

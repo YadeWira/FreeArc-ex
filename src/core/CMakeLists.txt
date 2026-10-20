@@ -1,6 +1,7 @@
 add_library(fa_core STATIC
     src/crc32.cpp
     src/vint.cpp
+    src/arc.cpp
 )
 
 target_include_directories(fa_core PUBLIC include)
