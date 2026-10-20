@@ -22,3 +22,18 @@ add_test(NAME fixture_list
          COMMAND arc-ex l ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-m1.arc)
 set_tests_properties(fixture_list PROPERTIES
     PASS_REGULAR_EXPRESSION "4 file\\(s\\), 28000 byte\\(s\\)")
+
+# Fixtures produced by Arc.exe 0.67.1 with the methods M1 supports. `t` verifies
+# every per-file CRC; `x` output is compared against the source tree hashes.
+foreach(fixture m0 lzma lzmadir)
+    add_test(NAME test_${fixture} COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${fixture}.arc)
+    add_test(NAME extract_${fixture}
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/extract.sh
+                     $<TARGET_FILE:arc-ex>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${fixture}.arc
+                     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/src.sha256)
+endforeach()
+
+# Archives whose data uses a method chain must fail loudly, not silently.
+add_test(NAME chain_rejected COMMAND arc-ex t ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/oracle-m1.arc)
+set_tests_properties(chain_rejected PROPERTIES WILL_FAIL TRUE)

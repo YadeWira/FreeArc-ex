@@ -5,9 +5,8 @@
 #include <string>
 #include <vector>
 
-// Read side of the .arc format (docs/format/ARC-FORMAT.md). Milestone M1:
-// control blocks in `storing` only; compressed control blocks (the usual case,
-// directory compressed with lzma) arrive with the codec integration.
+// Read side of the .arc format (docs/format/ARC-FORMAT.md). Milestone M1: control
+// blocks and data blocks with `storing` and a single `lzma` stage.
 namespace fa {
 
 struct BlockRef {
@@ -20,15 +19,27 @@ struct BlockRef {
 };
 
 struct FileEntry {
-    std::string name;   // full path inside the archive, '/'-separated
+    std::string name;  // full path inside the archive, '/'-separated
     std::uint64_t size = 0;
     std::int32_t mtime = 0;  // Unix seconds (0.67 stores a signed 32-bit time)
     bool is_dir = false;
     std::uint32_t crc = 0;
+    std::size_t data_block = 0;  // index into ArchiveInfo::data_blocks
+    std::uint64_t offset = 0;    // offset of the file data inside its solid block
+};
+
+struct DataBlock {
+    std::string method;
+    std::uint64_t pos = 0;
+    std::uint64_t comp_size = 0;
+    std::uint64_t orig_size = 0;  // sum of the sizes of its files
+    std::size_t first_file = 0;
+    std::size_t file_count = 0;
 };
 
 struct ArchiveInfo {
     std::vector<BlockRef> blocks;  // control blocks, in archive order (no footer)
+    std::vector<DataBlock> data_blocks;
     bool locked = false;
     std::string comment;
     std::vector<FileEntry> files;
@@ -45,9 +56,21 @@ enum BlockType : std::uint32_t {
     kRecoveryBlock = 5,
 };
 
-// Parses an archive's metadata: footer, control blocks and file list.
-// Returns false and fills `error` on any inconsistency (bad signature, CRC
-// mismatch, truncated input, unsupported compression method).
-bool open_archive(const std::filesystem::path& path, ArchiveInfo& info, std::string& error);
+// An opened archive: keeps the file contents in memory and exposes the parsed
+// metadata plus on-demand block decompression.
+class Archive {
+public:
+    static bool open(const std::filesystem::path& path, Archive& archive, std::string& error);
+
+    const ArchiveInfo& info() const { return info_; }
+
+    // Decompresses data block `index` into exactly its original size.
+    bool read_data_block(std::size_t index, std::vector<std::uint8_t>& out,
+                         std::string& error) const;
+
+private:
+    std::vector<std::uint8_t> buf_;
+    ArchiveInfo info_;
+};
 
 }  // namespace fa

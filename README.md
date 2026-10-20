@@ -4,10 +4,11 @@ Extended support for [FreeArc 0.67](https://sourceforge.net/projects/freearc/):
 a maintained version of the archiver with new platforms, updated libraries,
 bug fixes and a GTK3 GUI.
 
-**Status: M1 in progress (read side).** `arc-ex l` lists real archives created by
-`arc.exe` when the directory is stored uncompressed (`-dm0`); compressed control
-blocks, creation and extraction are the next steps. The milestone plan is in
-[`docs/PLAN.md`](docs/PLAN.md).
+**Status: M1 read side complete.** `arc-ex l`, `t` and `x` work on real archives
+created by `arc.exe` with `storing` or a single `lzma` stage, both for the
+directory and for the data; extraction is verified file by file against the
+stored CRCs. Method chains (`rep+4x4+tor`, ...) and archive creation are next.
+The milestone plan is in [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Targets
 

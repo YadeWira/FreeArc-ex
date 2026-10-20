@@ -2,10 +2,10 @@
 
 #include <cstring>
 #include <fstream>
-#include <optional>
 #include <string_view>
 
 #include "fa/crc32.h"
+#include "fa/decompress.h"
 #include "fa/format.h"
 #include "fa/vint.h"
 
@@ -46,7 +46,7 @@ public:
         return true;
     }
 
-    bool bytes(std::size_t n)
+    bool skip(std::size_t n)
     {
         if (size_ - pos_ < n) return false;
         pos_ += n;
@@ -86,8 +86,6 @@ bool load_file(const std::filesystem::path& path, std::vector<std::uint8_t>& dat
     return true;
 }
 
-// Parses the local descriptor that starts at `pos`. On success `block.pos` is
-// the absolute offset of the described data.
 bool parse_descriptor(const std::vector<std::uint8_t>& buf, std::size_t pos, BlockRef& block)
 {
     if (buf.size() - pos < format::kSignature.size()) return false;
@@ -96,7 +94,7 @@ bool parse_descriptor(const std::vector<std::uint8_t>& buf, std::size_t pos, Blo
     }
 
     Cursor cur(buf.data() + pos, buf.size() - pos);
-    if (!cur.bytes(format::kSignature.size())) return false;
+    if (!cur.skip(format::kSignature.size())) return false;
 
     std::uint64_t type = 0;
     std::string method;
@@ -108,14 +106,12 @@ bool parse_descriptor(const std::vector<std::uint8_t>& buf, std::size_t pos, Blo
         return false;
     }
 
-    // descr_crc covers signature..crc, i.e. everything consumed so far.
     const std::size_t covered = cur.pos();
     std::uint32_t descr_crc = 0;
     if (!cur.u32(descr_crc)) return false;
     if (crc32(buf.data() + pos, covered) != descr_crc) return false;
 
-    if (comp == 0 || orig == 0) return false;
-    if (comp > pos) return false;
+    if (comp == 0 || orig == 0 || comp > pos) return false;
 
     block.type = static_cast<std::uint32_t>(type);
     block.method = std::move(method);
@@ -126,34 +122,21 @@ bool parse_descriptor(const std::vector<std::uint8_t>& buf, std::size_t pos, Blo
     return true;
 }
 
-// Returns the decompressed contents of a control block. Only `storing` is
-// supported in M1; anything else is reported as unsupported, never guessed.
 bool read_block(const std::vector<std::uint8_t>& buf, const BlockRef& block,
                 std::vector<std::uint8_t>& out, std::string& error)
 {
-    if (block.orig_size > SIZE_MAX || block.comp_size > SIZE_MAX) {
+    if (block.comp_size > SIZE_MAX || block.orig_size > SIZE_MAX) {
         error = "block too large";
         return false;
     }
     const std::size_t comp = static_cast<std::size_t>(block.comp_size);
     const std::size_t orig = static_cast<std::size_t>(block.orig_size);
-    if (block.pos > buf.size() || buf.size() - block.pos < comp) {
+    if (block.pos > buf.size() || buf.size() - static_cast<std::size_t>(block.pos) < comp) {
         error = "block data out of range";
         return false;
     }
 
-    if (block.method != "storing") {
-        error = "unsupported control-block method '" + block.method +
-                "' (only storing in M1)";
-        return false;
-    }
-    if (orig != comp) {
-        error = "storing block with orig_size != comp_size";
-        return false;
-    }
-
-    out.assign(buf.begin() + static_cast<std::ptrdiff_t>(block.pos),
-               buf.begin() + static_cast<std::ptrdiff_t>(block.pos + comp));
+    if (!decompress(block.method, buf.data() + block.pos, comp, orig, out, error)) return false;
     if (crc32(out.data(), out.size()) != block.crc) {
         error = "block CRC mismatch";
         return false;
@@ -205,7 +188,7 @@ bool parse_footer(const std::vector<std::uint8_t>& data, ArchiveInfo& info, std:
             return false;
         }
         block.type = static_cast<std::uint32_t>(type);
-        block.pos = rel_pos;  // resolved by the caller, relative to the footer position
+        block.pos = rel_pos;  // relative to the footer; resolved by the caller
     }
 
     std::uint8_t locked = 0;
@@ -220,7 +203,7 @@ bool parse_footer(const std::vector<std::uint8_t>& data, ArchiveInfo& info, std:
         error = "invalid old comment length";
         return false;
     }
-    if (!cur.bytes(static_cast<std::size_t>(old_comment_len) * 4)) {
+    if (!cur.skip(static_cast<std::size_t>(old_comment_len) * 4)) {
         error = "truncated old comment";
         return false;
     }
@@ -239,7 +222,7 @@ bool parse_footer(const std::vector<std::uint8_t>& data, ArchiveInfo& info, std:
             return false;
         }
         const std::size_t start = cur.pos();
-        if (!cur.bytes(static_cast<std::size_t>(comment_len))) {
+        if (!cur.skip(static_cast<std::size_t>(comment_len))) {
             error = "truncated comment";
             return false;
         }
@@ -268,7 +251,8 @@ std::string sanitize_path(std::string_view raw)
     return out;
 }
 
-bool parse_directory(const std::vector<std::uint8_t>& data, ArchiveInfo& info, std::string& error)
+bool parse_directory(const std::vector<std::uint8_t>& data, std::uint64_t dir_block_pos,
+                     ArchiveInfo& info, std::string& error)
 {
     Cursor cur(data.data(), data.size());
 
@@ -278,6 +262,10 @@ bool parse_directory(const std::vector<std::uint8_t>& data, ArchiveInfo& info, s
         return false;
     }
 
+    auto& blocks = info.data_blocks;
+    const std::size_t first_block = blocks.size();
+    blocks.resize(first_block + static_cast<std::size_t>(nblocks));
+
     std::vector<std::uint64_t> counts(static_cast<std::size_t>(nblocks));
     std::uint64_t total = 0;
     for (auto& count : counts) {
@@ -286,29 +274,37 @@ bool parse_directory(const std::vector<std::uint8_t>& data, ArchiveInfo& info, s
             return false;
         }
         total += count;
-        if (total > data.size()) {  // sanity: never allocate more than the block
+        if (total > data.size()) {
             error = "invalid file count";
             return false;
         }
     }
+    const std::size_t first_file = info.files.size();
 
-    for (std::uint64_t i = 0; i < nblocks; ++i) {
-        std::string method;
-        if (!cur.cstr(method)) {
+    // Methods, relative offsets and compressed sizes, each in its own column.
+    std::size_t file_cursor = 0;
+    for (std::size_t b = 0; b < counts.size(); ++b) {
+        auto& block = blocks[first_block + b];
+        if (!cur.cstr(block.method)) {
             error = "truncated block method";
             return false;
         }
+        block.file_count = static_cast<std::size_t>(counts[b]);
+        block.first_file = first_file + file_cursor;
+        file_cursor += static_cast<std::size_t>(counts[b]);
     }
-    for (std::uint64_t i = 0; i < nblocks; ++i) {
+    for (std::size_t b = 0; b < counts.size(); ++b) {
+        auto& block = blocks[first_block + b];
         std::uint64_t rel = 0;
-        if (!cur.vint(rel)) {
-            error = "truncated data block offset";
+        if (!cur.vint(rel) || rel > dir_block_pos) {
+            error = "invalid data block offset";
             return false;
         }
+        block.pos = dir_block_pos - rel;
     }
-    for (std::uint64_t i = 0; i < nblocks; ++i) {
-        std::uint64_t comp = 0;
-        if (!cur.vint(comp)) {
+    for (std::size_t b = 0; b < counts.size(); ++b) {
+        auto& block = blocks[first_block + b];
+        if (!cur.vint(block.comp_size)) {
             error = "truncated data block size";
             return false;
         }
@@ -385,7 +381,7 @@ bool parse_directory(const std::vector<std::uint8_t>& data, ArchiveInfo& info, s
         }
     }
 
-    // Optional fields: a tag 0 ends the list; unknown optional tags are skipped,
+    // Optional fields: tag 0 ends the list; unknown optional tags are skipped,
     // unknown mandatory ones are an error (0.67 writes only the end tag).
     while (!cur.eof()) {
         std::uint64_t tag = 0;
@@ -404,68 +400,97 @@ bool parse_directory(const std::vector<std::uint8_t>& data, ArchiveInfo& info, s
             error = "unknown mandatory directory field";
             return false;
         }
-        if (!cur.bytes(static_cast<std::size_t>(len))) {
+        if (!cur.skip(static_cast<std::size_t>(len))) {
             error = "truncated optional field";
             return false;
         }
     }
 
+    // Attach each file to its block and compute its offset inside the solid block.
     info.files.insert(info.files.end(), files.begin(), files.end());
+    for (std::size_t b = 0; b < counts.size(); ++b) {
+        auto& block = blocks[first_block + b];
+        std::uint64_t offset = 0;
+        block.orig_size = 0;
+        for (std::size_t i = 0; i < block.file_count; ++i) {
+            FileEntry& file = info.files[block.first_file + i];
+            file.data_block = first_block + b;
+            file.offset = offset;
+            offset += file.size;
+        }
+        block.orig_size = offset;
+    }
     return true;
 }
 
 }  // namespace
 
-bool open_archive(const std::filesystem::path& path, ArchiveInfo& info, std::string& error)
+bool Archive::open(const std::filesystem::path& path, Archive& archive, std::string& error)
 {
-    std::vector<std::uint8_t> buf;
-    if (!load_file(path, buf, error)) return false;
+    Archive result;
+    if (!load_file(path, result.buf_, error)) return false;
 
     BlockRef footer;
-    if (!find_footer(buf, footer)) {
+    if (!find_footer(result.buf_, footer)) {
         error = "'" + path.string() + "' is not a FreeArc archive (no valid footer)";
         return false;
     }
 
     std::vector<std::uint8_t> footer_data;
-    if (!read_block(buf, footer, footer_data, error)) return false;
-    if (!parse_footer(footer_data, info, error)) return false;
+    if (!read_block(result.buf_, footer, footer_data, error)) return false;
+    if (!parse_footer(footer_data, result.info_, error)) return false;
 
-    // Block positions in the footer are relative to the footer descriptor.
-    for (auto& block : info.blocks) {
-        if (block.pos > footer.pos + format::kSignature.size()) {
+    for (auto& block : result.info_.blocks) {
+        if (block.pos > footer.pos) {
             error = "invalid block position in footer";
             return false;
         }
         block.pos = footer.pos - block.pos;
     }
 
-    info.sfx_size = footer.pos;
-    for (const auto& block : info.blocks) {
-        info.sfx_size = std::min(info.sfx_size, block.pos);
+    result.info_.sfx_size = footer.pos;
+    for (const auto& block : result.info_.blocks) {
+        result.info_.sfx_size = std::min(result.info_.sfx_size, block.pos);
     }
 
-    for (const auto& block : info.blocks) {
-        if (block.type == kHeaderBlock) {
-            std::vector<std::uint8_t> header;
-            if (!read_block(buf, block, header, error)) return false;
-            if (header.size() != format::kHeaderBlockSize ||
-                std::memcmp(header.data(), format::kSignature.data(), format::kSignature.size()) !=
-                    0) {
-                error = "invalid HEADER_BLOCK";
-                return false;
-            }
+    for (const auto& block : result.info_.blocks) {
+        if (block.type != kHeaderBlock) continue;
+        std::vector<std::uint8_t> header;
+        if (!read_block(result.buf_, block, header, error)) return false;
+        if (header.size() != format::kHeaderBlockSize ||
+            std::memcmp(header.data(), format::kSignature.data(), format::kSignature.size()) != 0) {
+            error = "invalid HEADER_BLOCK";
+            return false;
         }
     }
 
-    for (const auto& block : info.blocks) {
+    for (const auto& block : result.info_.blocks) {
         if (block.type != kDirBlock) continue;
         std::vector<std::uint8_t> dir;
-        if (!read_block(buf, block, dir, error)) return false;
-        if (!parse_directory(dir, info, error)) return false;
+        if (!read_block(result.buf_, block, dir, error)) return false;
+        if (!parse_directory(dir, block.pos, result.info_, error)) return false;
     }
 
+    archive = std::move(result);
     return true;
+}
+
+bool Archive::read_data_block(std::size_t index, std::vector<std::uint8_t>& out,
+                              std::string& error) const
+{
+    if (index >= info_.data_blocks.size()) {
+        error = "data block index out of range";
+        return false;
+    }
+    const DataBlock& block = info_.data_blocks[index];
+    if (block.pos > buf_.size() || buf_.size() - static_cast<std::size_t>(block.pos) <
+                                        static_cast<std::size_t>(block.comp_size)) {
+        error = "data block out of range";
+        return false;
+    }
+    return decompress(block.method, buf_.data() + block.pos,
+                      static_cast<std::size_t>(block.comp_size),
+                      static_cast<std::size_t>(block.orig_size), out, error);
 }
 
 }  // namespace fa

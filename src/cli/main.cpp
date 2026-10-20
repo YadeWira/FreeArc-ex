@@ -1,9 +1,14 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "fa/arc.h"
+#include "fa/crc32.h"
 #include "fa/format.h"
 
 namespace {
@@ -26,13 +31,15 @@ void print_usage(std::FILE* out)
                  "\n"
                  "Commands (M1, read side):\n"
                  "  l        list archive contents\n"
+                 "  t        test archive integrity (per-file CRCs)\n"
+                 "  x        extract archive\n"
+                 "             -dpDIR   extract into DIR (default: current directory)\n"
                  "\n"
                  "General options:\n"
                  "  -h, --help       show this help\n"
                  "  -V, --version    show the version\n"
                  "\n"
-                 "Limit: only control blocks stored uncompressed ('storing') are\n"
-                 "supported so far, i.e. archives created with -dm0.\n",
+                 "Limits: `storing` and a single `lzma` stage only, so far.\n",
                  kProgram, kVersion, kCompatibleWith);
 }
 
@@ -59,23 +66,15 @@ std::string format_size(std::uint64_t size)
     return buf;
 }
 
-int list_archive(const char* path)
+int list_archive(const fa::ArchiveInfo& info)
 {
-    fa::ArchiveInfo info;
-    std::string error;
-    if (!fa::open_archive(path, info, error)) {
-        std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
-        return 1;
-    }
-
     std::printf("%12s  %-16s  %s\n", "size", "date", "name");
     std::printf("%s\n", "------------------------------------------------------------");
     std::uint64_t total = 0;
     std::size_t entries = 0;
     for (const auto& file : info.files) {
         std::printf("%12s  %-16s  %s%s\n", format_size(file.size).c_str(),
-                    format_time(file.mtime).c_str(), file.name.c_str(),
-                    file.is_dir ? "/" : "");
+                    format_time(file.mtime).c_str(), file.name.c_str(), file.is_dir ? "/" : "");
         if (!file.is_dir) {
             total += file.size;
             ++entries;
@@ -84,6 +83,98 @@ int list_archive(const char* path)
     std::printf("%s\n", "------------------------------------------------------------");
     std::printf("%zu file(s), %llu byte(s)\n", entries,
                 static_cast<unsigned long long>(total));
+    if (info.locked) std::printf("archive is locked\n");
+    return 0;
+}
+
+// Walks the data blocks, checking (and optionally writing) every file.
+int process_archive(const fa::Archive& archive, const std::string& output_dir, bool extract)
+{
+    const fa::ArchiveInfo& info = archive.info();
+    std::size_t failures = 0;
+    std::uint64_t written = 0;
+
+    for (std::size_t b = 0; b < info.data_blocks.size(); ++b) {
+        std::vector<std::uint8_t> data;
+        std::string error;
+        if (!archive.read_data_block(b, data, error)) {
+            std::fprintf(stderr, "arc-ex: block %zu: %s\n", b, error.c_str());
+            ++failures;
+            continue;
+        }
+
+        const fa::DataBlock& block = info.data_blocks[b];
+        for (std::size_t i = 0; i < block.file_count; ++i) {
+            const fa::FileEntry& file = info.files[block.first_file + i];
+            if (file.is_dir) {
+                if (extract) {
+                    std::error_code ec;
+                    std::filesystem::create_directories(std::filesystem::path(output_dir) / file.name,
+                                                        ec);
+                    if (ec) {
+                        std::fprintf(stderr, "arc-ex: cannot create '%s': %s\n", file.name.c_str(),
+                                     ec.message().c_str());
+                        ++failures;
+                    }
+                }
+                continue;
+            }
+
+            if (file.offset + file.size > data.size()) {
+                std::fprintf(stderr, "arc-ex: '%s' outside its block\n", file.name.c_str());
+                ++failures;
+                continue;
+            }
+            const std::uint8_t* payload = data.data() + file.offset;
+            const auto size = static_cast<std::size_t>(file.size);
+
+            if (fa::crc32(payload, size) != file.crc) {
+                std::fprintf(stderr, "arc-ex: '%s': CRC mismatch\n", file.name.c_str());
+                ++failures;
+                continue;
+            }
+
+            if (!extract) continue;
+
+            const std::filesystem::path target = std::filesystem::path(output_dir) / file.name;
+            std::error_code ec;
+            if (target.has_parent_path()) {
+                std::filesystem::create_directories(target.parent_path(), ec);
+                if (ec) {
+                    std::fprintf(stderr, "arc-ex: cannot create '%s': %s\n",
+                                 target.parent_path().string().c_str(), ec.message().c_str());
+                    ++failures;
+                    continue;
+                }
+            }
+            std::ofstream out(target, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                std::fprintf(stderr, "arc-ex: cannot write '%s'\n", target.string().c_str());
+                ++failures;
+                continue;
+            }
+            out.write(reinterpret_cast<const char*>(payload), static_cast<std::streamsize>(size));
+            if (!out) {
+                std::fprintf(stderr, "arc-ex: write error on '%s'\n", target.string().c_str());
+                ++failures;
+                continue;
+            }
+            out.close();
+
+            written += size;
+        }
+    }
+
+    if (failures != 0) {
+        std::fprintf(stderr, "arc-ex: %zu problem(s)\n", failures);
+        return 1;
+    }
+    if (extract) {
+        std::printf("All OK: %llu byte(s) extracted into '%s'\n",
+                    static_cast<unsigned long long>(written), output_dir.c_str());
+    } else {
+        std::printf("All OK: %zu file(s) verified\n", info.files.size());
+    }
     return 0;
 }
 
@@ -106,12 +197,69 @@ int main(int argc, char** argv)
         print_version();
         return 0;
     }
-    if (command == "l") {
+
+    if (command == "lt") {
         if (argc < 3) {
-            std::fprintf(stderr, "arc-ex: 'l' needs an archive name\n");
+            std::fprintf(stderr, "arc-ex: 'lt' needs an archive name\n");
             return 2;
         }
-        return list_archive(argv[2]);
+        fa::Archive archive;
+        std::string error;
+        if (!fa::Archive::open(argv[2], archive, error)) {
+            std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
+            return 1;
+        }
+        const fa::ArchiveInfo& info = archive.info();
+        std::printf("control blocks:\n");
+        for (const auto& b : info.blocks) {
+            std::printf("  type=%-2u pos=%-10llu orig=%-10llu comp=%-10llu %s\n", b.type,
+                        static_cast<unsigned long long>(b.pos),
+                        static_cast<unsigned long long>(b.orig_size),
+                        static_cast<unsigned long long>(b.comp_size), b.method.c_str());
+        }
+        std::printf("data blocks:\n");
+        for (const auto& b : info.data_blocks) {
+            std::printf("  pos=%-10llu orig=%-10llu comp=%-10llu files=%-3zu %s\n",
+                        static_cast<unsigned long long>(b.pos),
+                        static_cast<unsigned long long>(b.orig_size),
+                        static_cast<unsigned long long>(b.comp_size), b.file_count,
+                        b.method.c_str());
+        }
+        std::printf("sfx_size=%llu locked=%d\n",
+                    static_cast<unsigned long long>(info.sfx_size), info.locked ? 1 : 0);
+        return 0;
+    }
+
+    if (command != "l" && command != "t" && command != "x") {
+        std::fprintf(stderr, "arc-ex: command '%.*s' is not implemented yet\n",
+                     static_cast<int>(command.size()), command.data());
+        return 2;
+    }
+
+    std::string archive_path;
+    std::string output_dir = ".";
+    for (int i = 2; i < argc; ++i) {
+        const std::string_view arg(argv[i]);
+        if (arg.rfind("-dp", 0) == 0) {
+            output_dir = std::string(arg.substr(3));
+        } else if (arg == "-o+" || arg == "-o-") {
+            // Overwrite policy: accepted for CLI compatibility, extraction always overwrites.
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::fprintf(stderr, "arc-ex: unknown option '%.*s'\n", static_cast<int>(arg.size()),
+                         arg.data());
+            return 2;
+        } else if (archive_path.empty()) {
+            archive_path = std::string(arg);
+        } else {
+            std::fprintf(stderr, "arc-ex: selecting individual files is not implemented yet\n");
+            return 2;
+        }
+    }
+
+    if (archive_path.empty()) {
+        std::fprintf(stderr, "arc-ex: '%.*s' needs an archive name\n",
+                     static_cast<int>(command.size()), command.data());
+        return 2;
     }
 
     // Format consistency guard: if someone changes the header constants, the
@@ -119,6 +267,13 @@ int main(int argc, char** argv)
     static_assert(fa::format::kSignature.size() == 4);
     static_assert(fa::format::kHeaderBlockSize == 8);
 
-    std::fprintf(stderr, "arc-ex: command '%s' is not implemented yet\n", argv[1]);
-    return 2;
+    fa::Archive archive;
+    std::string error;
+    if (!fa::Archive::open(archive_path, archive, error)) {
+        std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
+        return 1;
+    }
+
+    if (command == "l") return list_archive(archive.info());
+    return process_archive(archive, output_dir, command == "x");
 }
