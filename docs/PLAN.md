@@ -22,7 +22,7 @@ Base decisions (ADR [0001](adr/0001-language-and-toolkit.md)):
 | **M3** | All five targets | Real testing in the `win7`, `win10` and `arm64` VMs | |
 | **M4** | Updated libraries and codecs | Modern LZMA SDK, LZ4 1.10 (CVE-2014-4611), LibTomCrypt 1.18.2, CRC/AES without x86 asm | |
 | **M5** | GTK3 GUI | Feature parity with the 0.67 GUI on Linux and Windows | |
-| **M6** | SFX, `unarc.dll`, Explorer extension, packaging | Clean install and smoke test in all three VMs | |
+| **M6** | SFX, `unarc.dll`, Explorer extension, packaging (installer with Inno Setup 7.1.0, see [INSTALLER.md](INSTALLER.md)) | Clean install and smoke test in all three VMs | |
 
 ## Working rules
 
