@@ -34,7 +34,7 @@ instead of reimplementing each codec. Things that mattered:
 | Windows cross | The sources include `<ShObjIdl.h>` and `<Wincrypt.h>` with capitalisation that only works on case-insensitive file systems: `src/codecs/compat/` provides shims. `_UNICODE`/`UNICODE` must be defined. |
 | arm64 | `CPU_Is_Aes_Supported()` is x86-only; declared/defined in `compat/fa_arch_compat.h` and `fa_compat.cpp` as "no AES instructions". |
 | Empty blocks | A data block with orig=0/comp=0 (all entries are directories) must be short-circuited: some codecs reject it. |
-| PPMd | The patched PPMd returns truncated output (both architectures); the encoder segfaults. Guarded. |
+| PPMd | The patched PPMd is 32-bit-only by construction (see the PPMd section below); guarded. |
 | LZ4 | The bundled 2012 codec rejects real 0.67.1 blocks (error -7). Guarded until the 1.10 update. |
 
 ## Presets and file classes (2026-10-20)
@@ -47,6 +47,36 @@ instead of reimplementing each codec. Things that mattered:
 | Dictionary limiting | `LimitDictionary()` only understands a **single stage**: chains have to be limited stage by stage and reassembled. |
 | ABI | `MemSize` is `size_t`: declaring the entry point with `uint64_t` works on x86-64 but corrupts the stack on i686 (crash inside `ShowCompressionMethod`). |
 | Block order | The directory assumes each block's files are **contiguous** in the file list. Grouping by class without reordering the entries produces archives that look fine and decode wrong. |
+
+## PPMd on 64-bit (2026-10-20, open)
+
+FreeArc's PPMd (Dmitry Shkarin's variant, modified) was never made 64-bit safe: it
+crashes on x86-64 in `UpdateModel`/`CreateSuccessors` and the encoder hangs. The
+reason is structural, not a missing cast:
+
+- The sub-allocator hands out **12-byte units** (`UNIT_SIZE`) and the whole model
+  assumes that a `PPM_CONTEXT` fits in one unit and a `STATE` in half of one.
+- With 64-bit pointers those structures are 20 and 18 bytes, so every context
+  overflows its unit.
+- `oneState()` overlays a `STATE` on the context header (`SummFreq`+`Stats`+
+  `Suffix`), which only makes sense with the 32-bit field sizes.
+
+Attempts made and why they are not enough:
+
+1. **Widen `UNIT_SIZE` to 20.** Compiles, but crashes later: state arrays are
+   allocated as `AllocUnits(256/2)` (two states per unit) and other places assume
+   the 12-byte granularity, so the model still overruns.
+2. **Store the references as 32-bit offsets** (`fa_heap_ptr<T>`: `Successor`,
+   `Stats`, `Suffix` become 4 bytes, so `PPM_CONTEXT` is 12 and `STATE` is 6).
+   Decoding stops crashing, but produces wrong bytes after the first few, and the
+   encoder hangs — the emulation is still incomplete (likely the allocator's
+   size math and the `Stats` iteration need the same treatment).
+
+Conclusion: the fix is a port of the 32-bit heap semantics (this is what PArc did
+in Pascal: references as `UInt32` offsets from the heap base, 12-byte units,
+6-byte states). It needs its own work item with a byte-exact test: decode a
+reference `ppmd` archive written by `arc.exe` and compare the whole block, then
+compress with our build and have `arc.exe t` accept it.
 
 ## Shared development resources
 
