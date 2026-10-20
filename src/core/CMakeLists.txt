@@ -8,6 +8,7 @@ add_library(fa_core STATIC
     src/codec.cpp
     src/arc_writer.cpp
     src/update.cpp
+    src/crypto.cpp
     src/preset.cpp
 )
 

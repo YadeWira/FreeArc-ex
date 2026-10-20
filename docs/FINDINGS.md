@@ -75,6 +75,20 @@ all five targets.
 Remaining known gap: `lz4` (the 2012 codec rejects real blocks with error -7;
 the 1.10 decoder arrives with the library update).
 
+## Encryption (2026-10-20)
+
+- The codec only takes the **key** (`:k<hex>`); key derivation lives in the
+  frontend: `PBKDF2-HMAC-SHA512(password, salt, n, keySize+2)`, key = first
+  `keySize` bytes, check-code = the last two.
+- What goes into the archive's method text is the stage **without** `:k`
+  (`aes-256/ctr:n1000:r0:i<iv>:s<salt>:c<code>`); the key is derived again from
+  the password when reading. The legacy library already exposes `Pbkdf2Hmac`,
+  so no new crypto code was needed.
+- A wrong password is detected by comparing the derived check-code with `:c`
+  before touching the data.
+- `-hp` (header encryption) additionally encrypts the header/directory and puts
+  `:s/:c/:i` in the plaintext footer; not implemented yet.
+
 ## Shared development resources
 
 - Oracle binary: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`

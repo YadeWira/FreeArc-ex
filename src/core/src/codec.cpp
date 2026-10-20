@@ -1,5 +1,7 @@
 #include "fa/codec.h"
 
+#include "fa/crypto.h"
+
 #include <climits>
 #include <string>
 
@@ -44,6 +46,14 @@ bool codec_decompress(const std::string& method, const std::uint8_t* input, std:
         error = "method '" + method + "' is not supported yet (known legacy codec bug)";
         return false;
     }
+    // Encrypted stages carry a salt but not the key: derive it from the password.
+    std::string effective = method;
+    std::string crypto_error;
+    if (!derive_encryption_key(effective, crypto_error)) {
+        error = crypto_error;
+        return false;
+    }
+
     if (input_size > static_cast<std::size_t>(INT_MAX) ||
         output_size > static_cast<std::size_t>(INT_MAX)) {
         error = "block too large for the legacy codec API";
@@ -52,7 +62,7 @@ bool codec_decompress(const std::string& method, const std::uint8_t* input, std:
 
     // The legacy parser may write into the method string while splitting it, so
     // it gets a private mutable copy (passing c_str() corrupts the source).
-    std::vector<char> method_copy(method.begin(), method.end());
+    std::vector<char> method_copy(effective.begin(), effective.end());
     method_copy.push_back('\0');
 
     output.resize(output_size);

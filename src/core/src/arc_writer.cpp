@@ -9,6 +9,7 @@
 #include "fa/arc.h"
 #include "fa/codec.h"
 #include "fa/crc32.h"
+#include "fa/crypto.h"
 #include "fa/format.h"
 
 #include "fa/method.h"
@@ -390,10 +391,24 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
         const std::uint64_t dict = block.plain.size() + block.plain.size() / 100 + 512;
         if (!codec_limit_dictionary(block.method, dict, limited, error)) return false;
         block.method = limited;
-        if (!codec_compress(block.method, block.plain.data(), block.plain.size(), block.packed,
+        std::string to_compress = block.method;
+        std::string to_store = block.method;
+        if (password_is_set()) {
+            std::string with_key;
+            std::string stored;
+            std::string crypto_error;
+            if (!make_encryption_stage(256, password(), with_key, stored, crypto_error)) {
+                error = crypto_error;
+                return false;
+            }
+            to_compress += "+" + with_key;
+            to_store += "+" + stored;
+        }
+        if (!codec_compress(to_compress, block.plain.data(), block.plain.size(), block.packed,
                             error)) {
             return false;
         }
+        block.method = to_store;
     }
 
     std::vector<std::uint8_t> header(format::kSignature.begin(), format::kSignature.end());
