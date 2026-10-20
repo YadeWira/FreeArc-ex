@@ -11,6 +11,7 @@
 #include "fa/arc_writer.h"
 #include "fa/crc32.h"
 #include "fa/format.h"
+#include "fa/preset.h"
 
 namespace {
 
@@ -264,7 +265,31 @@ int main(int argc, char** argv)
             return 2;
         }
         if (!method_given) options.method = "lzma";
+
+        // File classes and method definitions: arc.groups orders/classifies the
+        // input files, arc.ini (optional) overrides the built-in presets.
+        static fa::FileClasses classes;
+        static fa::MethodTable table;
         std::string error;
+        for (const char* candidate : {"arc.groups", "data/arc.groups"}) {
+            if (std::filesystem::exists(candidate)) {
+                if (!classes.load(candidate, error)) {
+                    std::fprintf(stderr, "arc-ex: warning: %s\n", error.c_str());
+                }
+                break;
+            }
+        }
+        for (const char* candidate : {"arc.ini"}) {
+            if (std::filesystem::exists(candidate)) {
+                if (!table.load_ini(candidate, error)) {
+                    std::fprintf(stderr, "arc-ex: warning: %s\n", error.c_str());
+                }
+                break;
+            }
+        }
+        options.table = &table;
+        options.classes = &classes;
+
         if (!fa::create_archive(archive, inputs, options, error)) {
             std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
             return 1;

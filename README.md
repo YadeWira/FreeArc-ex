@@ -7,9 +7,12 @@ bug fixes and a GTK3 GUI.
 **Status: M2 in progress.** The legacy codec engine is integrated, so `arc-ex`
 reads and writes archives using any method it implements (`lzma`, `rep`, `4x4`,
 `tor`, `dict`, `lzp`, `grzip`, `tta`, `mm`, `delta`, `exe`, `dispack`) and chains
-of them, with `arc.exe` 0.67.1 as the oracle in both directions. `ppmd` and `lz4`
-are guarded with a clear error (known legacy bugs). Update, encryption, presets
-and the GTK3 GUI are next; see [`docs/PLAN.md`](docs/PLAN.md).
+of them, with `arc.exe` 0.67.1 as the oracle in both directions. Presets
+`-m0`..`-m9` resolve through FreeArc's definition table and `arc.groups` classes,
+with one solid block per resolved method. `ppmd` and `lz4` are guarded with a
+clear error (known legacy bugs); text presets need PPMd, so they are the next
+blocker. Update, encryption and the GTK3 GUI follow; see
+[`docs/PLAN.md`](docs/PLAN.md).
 
 ## Targets
 

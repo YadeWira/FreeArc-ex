@@ -37,6 +37,17 @@ instead of reimplementing each codec. Things that mattered:
 | PPMd | The patched PPMd returns truncated output (both architectures); the encoder segfaults. Guarded. |
 | LZ4 | The bundled 2012 codec rejects real 0.67.1 blocks (error -7). Guarded until the 1.10 update. |
 
+## Presets and file classes (2026-10-20)
+
+| topic | finding |
+|---|---|
+| Definitions | The preset table is the `builtinMethodSubsts` list from `Compression.hs`: `#` is replaced by each digit 1..9 **in both the name and the value**, and alternatives are separated by `/` (`$obj=`, `$text=` or positional `default/binary/text`). |
+| Synonyms | `#bx = #xb` and `#tx = #xt` must be present or chains stop expanding half way (the symptom: a literal `4bx` survives into the method text). |
+| Classification | `arc.groups` is an ordered list of sections (`$text`, `$obj`, ...) with wildcards; the first matching section wins. |
+| Dictionary limiting | `LimitDictionary()` only understands a **single stage**: chains have to be limited stage by stage and reassembled. |
+| ABI | `MemSize` is `size_t`: declaring the entry point with `uint64_t` works on x86-64 but corrupts the stack on i686 (crash inside `ShowCompressionMethod`). |
+| Block order | The directory assumes each block's files are **contiguous** in the file list. Grouping by class without reordering the entries produces archives that look fine and decode wrong. |
+
 ## Shared development resources
 
 - Oracle binary: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`

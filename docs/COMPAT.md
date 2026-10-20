@@ -79,9 +79,14 @@ as each fix lands with its test.
   rejects real blocks with error -7; the 1.10 decoder comes with the library
   update). Both are rejected with a clear error instead of crashing or
   producing garbage.
+- **Presets**: `-m0`..`-m9` resolve through FreeArc's own definition table
+  (built-in, or `arc.ini` if present) and the file classes in `arc.groups`;
+  files are grouped into one solid block per resolved method and dictionaries are
+  limited to the block size. Binary presets work end to end. **Text presets
+  (4t/5t and above) are blocked by PPMd**, so a tree with `.txt` files currently
+  stops with a clear error instead of writing a wrong archive.
 - Commands: `a`, `l`, `lb`, `t`, `x`. No update (`u`/`f`/`d`), no masks or
-  selective extraction, no overwrite policy, no presets (`-m1`..`-m9` need the
-  per-filetype logic from M2).
+  selective extraction, no overwrite policy.
 - Creation writes a single solid data block and stores the directory
   uncompressed; splitting and `-dm` methods arrive later in M2.
 - Reading is memory-mapped; creation still reads each file into memory, so very

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <map>
 
 #include "fa/arc.h"
 #include "fa/codec.h"
@@ -164,24 +165,8 @@ bool create_archive(const std::filesystem::path& archive,
         return false;
     }
 
-    // Solid data: all file contents concatenated, in directory order.
-    std::vector<std::uint8_t> plain;
-    for (const auto& entry : entries) {
-        if (!entry.is_dir) plain.insert(plain.end(), entry.data.begin(), entry.data.end());
-    }
-
-    std::string data_method = "storing";
-    std::vector<std::uint8_t> packed;
-    if (options.method == "storing" || options.method == "0" || plain.empty()) {
-        packed = plain;
-    } else {
-        data_method = options.method;
-        if (!codec_compress(data_method, plain.data(), plain.size(), packed, error)) return false;
-        // The library may canonicalise the method; keep the text it was given,
-        // which is what the decoder needs.
-    }
-
-    // Directory data: one data block holding every entry, then column-wise fields.
+    // Directory table: index 0 is the root, and every parent directory must be
+    // registered before the names are written.
     std::vector<std::string> dirs{""};
     auto dir_index = [&dirs](const std::string& dir) {
         const auto it = std::find(dirs.begin(), dirs.end(), dir);
@@ -189,35 +174,90 @@ bool create_archive(const std::filesystem::path& archive,
         dirs.push_back(dir);
         return static_cast<std::uint64_t>(dirs.size() - 1);
     };
-
-    auto build_dir_data = [&](std::uint64_t data_rel) {
-        std::vector<std::uint8_t> out;
-        write_vint(out, 1);  // one data block
-        write_vint(out, entries.size());
-        put_cstr(out, data_method);
-        write_vint(out, data_rel);
-        write_vint(out, packed.size());
-
-        write_vint(out, dirs.size());
-        for (const auto& dir : dirs) put_cstr(out, dir);
-
-        for (const auto& entry : entries) put_cstr(out, entry.base);
-        for (const auto& entry : entries) write_vint(out, dir_index(entry.dir));
-        for (const auto& entry : entries) write_vint(out, entry.size);
-        for (const auto& entry : entries) put_u32(out, static_cast<std::uint32_t>(entry.mtime));
-        for (const auto& entry : entries) out.push_back(entry.is_dir ? 1 : 0);
-        for (const auto& entry : entries) put_u32(out, entry.crc);
-        write_vint(out, 0);  // no optional fields
-        return out;
-    };
-
-    // Register every parent directory first: the count and the names must be
-    // written after the list is final.
     for (const auto& entry : entries) {
         if (!entry.dir.empty()) dir_index(entry.dir);
     }
 
-    // HEADER: 8 bytes.
+    // Resolve the method for each entry: directories carry no data and go to a
+    // storing block; files are classified (arc.groups) and the preset or name is
+    // expanded for that class.
+    std::vector<std::string> method_of(entries.size());
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].is_dir) {
+            method_of[i] = "storing";
+            continue;
+        }
+        const std::string cls =
+            options.classes != nullptr ? options.classes->classify(entries[i].name) : "$obj";
+        if (options.table != nullptr) {
+            method_of[i] = options.table->resolve(options.method, cls);
+        } else {
+            method_of[i] = options.method;
+        }
+        if (method_of[i] == "0") method_of[i] = "storing";
+        if (method_of[i].find("ppmd") != std::string::npos ||
+            method_of[i].find("lz4") != std::string::npos) {
+            error = "the preset resolves to '" + method_of[i] +
+                    "' for '" + entries[i].name +
+                    "', but ppmd and lz4 are not supported yet (see docs/COMPAT.md)";
+            return false;
+        }
+    }
+
+    // One solid block per distinct method, in first-seen order.
+    struct Block {
+        std::string method;
+        std::vector<std::size_t> entries;
+        std::vector<std::uint8_t> plain;
+        std::vector<std::uint8_t> packed;
+        std::uint64_t pos = 0;
+    };
+    std::vector<Block> blocks;
+    std::map<std::string, std::size_t> block_of_method;
+
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const std::string& method = method_of[i];
+        auto it = block_of_method.find(method);
+        if (it == block_of_method.end()) {
+            block_of_method[method] = blocks.size();
+            it = block_of_method.find(method);
+            blocks.push_back(Block{method, {}, {}, {}, 0});
+        }
+        const std::size_t b = it->second;
+        blocks[b].entries.push_back(i);
+        if (!entries[i].is_dir) {
+            blocks[b].plain.insert(blocks[b].plain.end(), entries[i].data.begin(),
+                                   entries[i].data.end());
+        }
+    }
+
+    // The directory stores the files grouped by block: the entries of a block
+    // must be contiguous in the file list, so the order is rebuilt from the
+    // blocks (which is also what makes the per-block offsets correct).
+    std::vector<std::size_t> order;
+    order.reserve(entries.size());
+    for (const auto& block : blocks) {
+        order.insert(order.end(), block.entries.begin(), block.entries.end());
+    }
+
+    // Compress each block. Dictionaries are limited to the block size, like the
+    // original ("rep:96m" becomes "rep:10kb" on a small block).
+    for (auto& block : blocks) {
+        if (block.plain.empty() || block.method == "storing" || block.method == "0") {
+            block.method = "storing";
+            block.packed = block.plain;
+            continue;
+        }
+        std::string limited;
+        const std::uint64_t dict = block.plain.size() + block.plain.size() / 100 + 512;
+        if (!codec_limit_dictionary(block.method, dict, limited, error)) return false;
+        block.method = limited;
+        if (!codec_compress(block.method, block.plain.data(), block.plain.size(), block.packed,
+                            error)) {
+            return false;
+        }
+    }
+
     std::vector<std::uint8_t> header(format::kSignature.begin(), format::kSignature.end());
     header.insert(header.end(), format::kVersionBytes.begin(), format::kVersionBytes.end());
 
@@ -225,14 +265,40 @@ bool create_archive(const std::filesystem::path& archive,
                                               header.size(),
                                               crc32(header.data(), header.size()));
     const std::uint64_t header_total = header.size() + header_descr.size();
-    const std::uint64_t data_pos = header_total;
-    const std::uint64_t dir_pos = data_pos + packed.size();
 
-    // Both offsets are relative to the *data* position of the referring block
-    // (that is what the reference reader does), and both are known before
-    // writing: no fixed point is needed.
-    const std::uint64_t data_rel = dir_pos - data_pos;
-    const std::vector<std::uint8_t> dir_data = build_dir_data(data_rel);
+    // Block positions: right after the header, in block order.
+    std::uint64_t pos = header_total;
+    for (auto& block : blocks) {
+        block.pos = pos;
+        pos += block.packed.size();
+    }
+    const std::uint64_t dir_pos = pos;
+
+    // Directory data: one entry per block, then the column-wise file fields. The
+    // per-block offsets are relative to the directory block's data position,
+    // which is known once every block is compressed.
+    auto build_dir_data_full = [&]() {
+        std::vector<std::uint8_t> out;
+        write_vint(out, blocks.size());
+        for (const auto& block : blocks) write_vint(out, block.entries.size());
+        for (const auto& block : blocks) put_cstr(out, block.method);
+        for (const auto& block : blocks) write_vint(out, dir_pos - block.pos);
+        for (const auto& block : blocks) write_vint(out, block.packed.size());
+
+        write_vint(out, dirs.size());
+        for (const auto& dir : dirs) put_cstr(out, dir);
+        for (const auto index : order) put_cstr(out, entries[index].base);
+        for (const auto index : order) write_vint(out, dir_index(entries[index].dir));
+        for (const auto index : order) write_vint(out, entries[index].size);
+        for (const auto index : order)
+            put_u32(out, static_cast<std::uint32_t>(entries[index].mtime));
+        for (const auto index : order) out.push_back(entries[index].is_dir ? 1 : 0);
+        for (const auto index : order) put_u32(out, entries[index].crc);
+        write_vint(out, 0);
+        return out;
+    };
+    std::vector<std::uint8_t> dir_data = build_dir_data_full();
+
     const auto dir_descr =
         make_descriptor(kDirBlock, "storing", dir_data.size(), dir_data.size(),
                         crc32(dir_data.data(), dir_data.size()));
@@ -274,8 +340,11 @@ bool create_archive(const std::filesystem::path& archive,
         return static_cast<bool>(out);
     };
 
-    if (!write_bytes(header) || !write_bytes(header_descr) || !write_bytes(packed) ||
-        !write_bytes(dir_data) || !write_bytes(dir_descr) || !write_bytes(footer_data) ||
+    bool ok = write_bytes(header) && write_bytes(header_descr);
+    for (const auto& block : blocks) {
+        ok = ok && write_bytes(block.packed);
+    }
+    if (!ok || !write_bytes(dir_data) || !write_bytes(dir_descr) || !write_bytes(footer_data) ||
         !write_bytes(footer_descr)) {
         error = "write error on '" + archive.string() + "'";
         return false;

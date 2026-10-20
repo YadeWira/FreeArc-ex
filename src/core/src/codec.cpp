@@ -7,6 +7,7 @@
 extern "C" {
 int DecompressMem(char* method, void* input, int inputSize, void* output, int outputSize);
 int CompressMem(char* method, void* input, int inputSize, void* output, int outputSize);
+int LimitDictionary(char* in_method, std::size_t dict, char* out_method);
 }
 
 namespace fa {
@@ -113,6 +114,36 @@ bool codec_compress(const std::string& method, const std::uint8_t* input, std::s
         output.resize(static_cast<std::size_t>(written));
         return true;
     }
+}
+
+
+bool codec_limit_dictionary(const std::string& method, std::uint64_t dict, std::string& output,
+                            std::string& error)
+{
+    // The parser behind LimitDictionary only understands a single stage, so the
+    // chain is limited stage by stage and reassembled.
+    output.clear();
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t end = method.find('+', start);
+        const std::string stage =
+            method.substr(start, end == std::string::npos ? std::string::npos : end - start);
+
+        std::vector<char> in(stage.begin(), stage.end());
+        in.push_back('\0');
+        std::vector<char> out(4096);
+        const int rc = LimitDictionary(in.data(), dict, out.data());
+        if (rc < 0) {
+            error = "cannot limit the dictionary of '" + stage + "' (" + describe(rc) + ")";
+            return false;
+        }
+        if (!output.empty()) output += '+';
+        output += out.data();
+
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return true;
 }
 
 }  // namespace fa

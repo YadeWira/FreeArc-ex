@@ -56,3 +56,8 @@ if(FA_WINE AND EXISTS "${FA_ARC_ORACLE_DEFAULT}")
                          ${FA_WINE} ${method})
     endforeach()
 endif()
+
+add_executable(preset_test unit/preset_test.cpp)
+target_link_libraries(preset_test PRIVATE fa::core)
+add_test(NAME preset COMMAND preset_test)
+set_tests_properties(preset PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

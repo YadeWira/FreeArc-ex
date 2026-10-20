@@ -7,6 +7,7 @@ add_library(fa_core STATIC
     src/decompress.cpp
     src/codec.cpp
     src/arc_writer.cpp
+    src/preset.cpp
 )
 
 target_include_directories(fa_core PUBLIC include)
