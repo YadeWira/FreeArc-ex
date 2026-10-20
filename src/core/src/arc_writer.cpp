@@ -195,11 +195,10 @@ bool create_archive(const std::filesystem::path& archive,
             method_of[i] = options.method;
         }
         if (method_of[i] == "0") method_of[i] = "storing";
-        if (method_of[i].find("ppmd") != std::string::npos ||
-            method_of[i].find("lz4") != std::string::npos) {
-            error = "the preset resolves to '" + method_of[i] +
-                    "' for '" + entries[i].name +
-                    "', but ppmd and lz4 are not supported yet (see docs/COMPAT.md)";
+        if (!codec_method_supported(method_of[i])) {
+            error = "the preset resolves to '" + method_of[i] + "' for '" + entries[i].name +
+                    "', but that method is not supported on this architecture yet "
+                    "(see docs/COMPAT.md)";
             return false;
         }
     }

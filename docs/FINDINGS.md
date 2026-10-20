@@ -48,6 +48,21 @@ instead of reimplementing each codec. Things that mattered:
 | ABI | `MemSize` is `size_t`: declaring the entry point with `uint64_t` works on x86-64 but corrupts the stack on i686 (crash inside `ShowCompressionMethod`). |
 | Block order | The directory assumes each block's files are **contiguous** in the file list. Grouping by class without reordering the entries produces archives that look fine and decode wrong. |
 
+## PPMd: 32-bit works, 64-bit open (2026-10-20)
+
+**The 32-bit failure was strict aliasing, not PPMd.** The codecs do heavy type
+punning (`(DWORD*)pc1`, `(WORD&)s1`, `(STATE&)SummFreq`) and GCC at `-O2` or
+above miscompiles PPMd decompression when strict aliasing is on: it returns a
+few correct bytes and then diverges, which looked like a format problem. With
+`-fno-strict-aliasing` (now mandatory for the legacy codec target):
+
+- i686 decodes a reference `ppmd` archive **byte-exactly** (sha256 of the block
+  matches the extraction done by `arc.exe`);
+- i686 compresses with `ppmd` and `Arc.exe t` accepts the archive;
+- text presets (`-m4`, which end in `ppmd`) work on i686.
+
+64-bit is still open, for the structural reason below.
+
 ## PPMd on 64-bit (2026-10-20, open)
 
 FreeArc's PPMd (Dmitry Shkarin's variant, modified) was never made 64-bit safe: it

@@ -45,7 +45,11 @@ else()
 endif()
 
 # Legacy vendor code: keep the project's warnings out of it.
-target_compile_options(fa_legacy PRIVATE -w -Wno-narrowing -fno-rtti
+# -fno-strict-aliasing is mandatory: the codecs do heavy type punning
+# ((DWORD*)pc1, (WORD&)s1, (STATE&)SummFreq, ...) and GCC at -O2 or above
+# miscompiles PPMd decompression when strict aliasing is enabled (it produces
+# short, corrupt output). Found tracking down the PPMd failures.
+target_compile_options(fa_legacy PRIVATE -w -Wno-narrowing -fno-rtti -fno-strict-aliasing
                        -include "${CMAKE_CURRENT_SOURCE_DIR}/compat/fa_arch_compat.h")
 
 # 64-bit pointer-aware code paths (Tornado match finder) are selected by this.

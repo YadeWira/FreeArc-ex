@@ -74,12 +74,14 @@ as each fix lands with its test.
   `tor`, `dict`, `lzp`, `grzip`, `tta`, `mm`, `delta`, `exe`, `dispack070` and
   arbitrary chains of them (`rep:96m+lzma:8mb`, `exe+lzma:16mb`, ...) work in
   both directions.
-- **Known gaps**: `ppmd` (FreeArc's PPMd is 32-bit-only by construction: a
-  64-bit port needs the 32-bit heap emulation, see
-  [FINDINGS](FINDINGS.md#ppmd-on-64-bit-2026-10-20-open)) and `lz4` (the 2012
-  codec rejects real blocks with error -7; the 1.10 decoder comes with the
-  library update). Both are rejected with a clear error instead of crashing or
-  producing garbage.
+- **Known gaps**: `ppmd` works on **32-bit** builds (decoding, encoding and the
+  text presets are verified against `arc.exe`); on **64-bit** it is still
+  rejected, because the PPMd model is 32-bit-only by construction and needs the
+  heap emulation described in
+  [FINDINGS](FINDINGS.md#ppmd-on-64-bit-2026-10-20-open). `lz4` (the 2012 codec
+  rejects real blocks with error -7) is rejected on all architectures; the 1.10
+  decoder comes with the library update. Unsupported methods fail with a clear
+  error instead of crashing or producing garbage.
 - **Presets**: `-m0`..`-m9` resolve through FreeArc's own definition table
   (built-in, or `arc.ini` if present) and the file classes in `arc.groups`;
   files are grouped into one solid block per resolved method and dictionaries are

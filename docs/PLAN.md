@@ -18,7 +18,7 @@ Base decisions (ADR [0001](adr/0001-language-and-toolkit.md)):
 |---|---|---|---|
 | **M0** | Scaffolding: layout, CMake, five toolchains, `arc.exe` oracle, local CI, ADRs | The build matrix compiles and tests pass on all five targets; the oracle compresses, lists and extracts under wine | ✅ |
 | **M1** | Vertical slice: `a/l/x/t` with `storing` and `lzma` on Linux x64 | Round trip over the corpus; `arc.exe` extracts what `arc-ex` wrote and vice versa | ✅ `a`, `l`, `lb`, `t`, `x`; differential tests against `arc.exe` in both directions |
-| **M2** | Full engine: `a/u/f/d`, solid blocks and `-s`, filters, AES encryption, `-rr`, `arc.ini`, Lua hooks, complete CLI | Order, update and write matrices against `arc.exe`; update fuzzing with no divergence | 🚧 codecs and presets done (chains both ways; binary presets, text presets blocked on PPMd); `-s`, update, encryption and CLI pending |
+| **M2** | Full engine: `a/u/f/d`, solid blocks and `-s`, filters, AES encryption, `-rr`, `arc.ini`, Lua hooks, complete CLI | Order, update and write matrices against `arc.exe`; update fuzzing with no divergence | 🚧 codecs and presets done (chains both ways; all presets on 32-bit, text presets blocked on PPMd only on 64-bit); `-s`, update, encryption and CLI pending |
 | **M3** | All five targets | Real testing in the `win7`, `win10` and `arm64` VMs | |
 | **M4** | Updated libraries and codecs | Modern LZMA SDK, LZ4 1.10 (CVE-2014-4611), LibTomCrypt 1.18.2, CRC/AES without x86 asm | |
 | **M5** | GTK3 GUI | Feature parity with the 0.67 GUI on Linux and Windows | |
