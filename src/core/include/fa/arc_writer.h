@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "fa/preset.h"
+#include "fa/progress.h"
 
 namespace fa {
 
@@ -42,6 +43,7 @@ struct AddOptions {
     std::string archive_prefix;                  // -ap: base directory inside the archive
     std::string encryption_algorithm = "aes";    // -ae
     std::string directory_method;                // -dm: compressor for the directory block
+    ProgressFn progress;                         // optional, for long archives
     std::string recovery;                        // -rr text, empty = no recovery record
     bool recovery_present = false;               // write the recovery field in the footer
 };

@@ -586,6 +586,9 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
 
     // Compress each block. Dictionaries are limited to the block size, like the
     // original ("rep:96m" becomes "rep:10kb" on a small block).
+    std::uint64_t progress_done = 0;
+    std::uint64_t progress_total = 0;
+    for (const auto& block : blocks) progress_total += block.plain.size();
     for (auto& block : blocks) {
         if (block.preserved) continue;  // already compressed
         if (block.plain.empty() || block.method == "storing" || block.method == "0") {
@@ -616,6 +619,11 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
             return false;
         }
         block.method = to_store;
+        progress_done += block.plain.size();
+        if (options.progress && !options.progress(progress_done, progress_total, block.method)) {
+            error = "cancelled";
+            return false;
+        }
     }
 
     std::vector<std::uint8_t> header(format::kSignature.begin(), format::kSignature.end());

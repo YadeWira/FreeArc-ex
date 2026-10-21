@@ -2,16 +2,12 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <string>
 #include <vector>
 
-namespace fa {
+#include "fa/progress.h"
 
-// Progress callback: done/total bytes and the current file. Returning false
-// cancels the operation.
-using ProgressFn = std::function<bool(std::uint64_t done, std::uint64_t total,
-                                      const std::string& current)>;
+namespace fa {
 
 struct ExtractOptions {
     std::filesystem::path output_dir = ".";

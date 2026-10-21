@@ -12,6 +12,8 @@
 
 #include "fa/arc.h"
 #include "fa/ops.h"
+#include "fa/arc_writer.h"
+#include "fa/crypto.h"
 
 namespace {
 
@@ -66,6 +68,7 @@ private:
     void on_about();
     void on_test();
     void on_extract();
+    void on_new_archive();
     void refresh_status();
 
     // Runs an archive operation in a worker thread with a progress dialog.
@@ -107,6 +110,10 @@ MainWindow::MainWindow()
     auto* file_item = Gtk::manage(new Gtk::MenuItem("_File", true));
     Gtk::Menu* file_menu = Gtk::manage(new Gtk::Menu());
     {
+        auto* new_item = Gtk::manage(new Gtk::MenuItem("_New archive...", true));
+        new_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_new_archive));
+        file_menu->append(*new_item);
+
         auto* open_item = Gtk::manage(new Gtk::MenuItem("_Open archive...", true));
         open_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_open));
         file_menu->append(*open_item);
@@ -186,12 +193,6 @@ void MainWindow::refresh_status()
 void MainWindow::run_operation(
     const std::string& title, const std::function<bool(const fa::ProgressFn&, std::string&)>& operation)
 {
-    if (archive_path_.empty()) {
-        Gtk::MessageDialog dialog(*this, "Open an archive first", false, Gtk::MESSAGE_INFO);
-        dialog.run();
-        return;
-    }
-
     auto state = std::make_shared<ProgressState>();
     auto dialog = std::make_shared<Gtk::Dialog>(title, *this, true);
     dialog->set_default_size(420, -1);
@@ -269,8 +270,81 @@ void MainWindow::run_operation(
     worker.join();
 }
 
+void MainWindow::on_new_archive()
+{
+    Gtk::FileChooserDialog save(*this, "New archive", Gtk::FILE_CHOOSER_ACTION_SAVE);
+    save.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    save.add_button("_Next", Gtk::RESPONSE_OK);
+    save.set_do_overwrite_confirmation(true);
+    save.set_current_name("archive.arc");
+    if (save.run() != Gtk::RESPONSE_OK) return;
+    std::string archive = save.get_filename();
+    if (archive.size() < 4 || archive.substr(archive.size() - 4) != ".arc") archive += ".arc";
+
+    Gtk::FileChooserDialog folder(*this, "Folder to add", Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    folder.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    folder.add_button("_Next", Gtk::RESPONSE_OK);
+    if (folder.run() != Gtk::RESPONSE_OK) return;
+    const std::string input = folder.get_filename();
+
+    // Compression options.
+    Gtk::Dialog options("Compression options", *this, true);
+    auto* grid = Gtk::manage(new Gtk::Grid());
+    grid->set_row_spacing(8);
+    grid->set_column_spacing(8);
+    grid->set_margin_top(12);
+    grid->set_margin_bottom(12);
+    grid->set_margin_start(12);
+    grid->set_margin_end(12);
+
+    auto* method_label = Gtk::manage(new Gtk::Label("Method:"));
+    method_label->set_halign(Gtk::ALIGN_START);
+    auto* methods = Gtk::manage(new Gtk::ComboBoxText());
+    for (const char* item : {"lzma", "0 (storing)", "1", "2", "3", "4", "5", "9"}) {
+        methods->append(item);
+    }
+    methods->set_active(0);
+
+    auto* password_label = Gtk::manage(new Gtk::Label("Password:"));
+    password_label->set_halign(Gtk::ALIGN_START);
+    auto* password = Gtk::manage(new Gtk::Entry());
+    password->set_visibility(false);
+    password->set_placeholder_text("(none)");
+
+    grid->attach(*method_label, 0, 0, 1, 1);
+    grid->attach(*methods, 1, 0, 1, 1);
+    grid->attach(*password_label, 0, 1, 1, 1);
+    grid->attach(*password, 1, 1, 1, 1);
+    options.get_content_area()->add(*grid);
+    options.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    options.add_button("_Create", Gtk::RESPONSE_OK);
+    options.show_all();
+    if (options.run() != Gtk::RESPONSE_OK) return;
+
+    std::string method = methods->get_active_text();
+    if (method.rfind("0 (", 0) == 0) method = "storing";
+    const std::string pass = password->get_text();
+
+    run_operation("Create archive", [this, archive, input, method, pass](const fa::ProgressFn& p,
+                                                                        std::string& error) {
+        fa::AddOptions add;
+        add.method = method;
+        add.progress = p;
+        if (!pass.empty()) fa::set_password(pass);
+        if (!fa::create_archive(archive, {input}, add, error)) return false;
+        // Show the new archive right away.
+        open(archive);
+        return true;
+    });
+}
+
 void MainWindow::on_test()
 {
+    if (archive_path_.empty()) {
+        Gtk::MessageDialog dialog(*this, "Open an archive first", false, Gtk::MESSAGE_INFO);
+        dialog.run();
+        return;
+    }
     run_operation("Test archive", [this](const fa::ProgressFn& progress, std::string& error) {
         bool cancelled = false;
         return fa::test_archive(archive_path_, progress, cancelled, error);
@@ -279,6 +353,11 @@ void MainWindow::on_test()
 
 void MainWindow::on_extract()
 {
+    if (archive_path_.empty()) {
+        Gtk::MessageDialog dialog(*this, "Open an archive first", false, Gtk::MESSAGE_INFO);
+        dialog.run();
+        return;
+    }
     Gtk::FileChooserDialog dialog(*this, "Extract to folder", Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
     dialog.add_button("_Select", Gtk::RESPONSE_OK);
