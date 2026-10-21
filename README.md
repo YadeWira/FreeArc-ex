@@ -4,22 +4,23 @@ Extended support for [FreeArc 0.67](https://sourceforge.net/projects/freearc/):
 a maintained version of the archiver with new platforms, updated libraries,
 bug fixes and a GTK3 GUI.
 
-**Status: M2 in progress.** The legacy codec engine is integrated, so `arc-ex`
-reads and writes archives using any method it implements (`lzma`, `rep`, `4x4`,
-`tor`, `dict`, `lzp`, `grzip`, `tta`, `mm`, `delta`, `exe`, `dispack`) and chains
-of them, with `arc.exe` 0.67.1 as the oracle in both directions. Presets `-m0`..`-m9` resolve
-through FreeArc's definition table and `arc.groups` classes, with one solid block
-per resolved method, including the PPMd-based text chains on every target (the
-32-bit heap layout is emulated on 64-bit). `u`, `f` and `d` update archives
-(reusing untouched blocks in place, with the same block structure as the
-original) and solid-block grouping follows FreeArc's `-s`
-grammar. `-p` and `-hp` encrypt archives (AES-256/CTR with PBKDF2, data only or
-data plus headers) in a way `arc.exe` reads, and `-rr` writes a recovery record
-that both `arc.exe` and our own `r` command use to repair damaged sectors. LZ4 is pending its 1.10 update and
-fails with a clear error. The CLI already supports masks, exclusions, overwrite
-policy, `-ap`/`-ad`/`-ae`/`-ep`/`-ma` and FreeArc's exit codes, reads the method definitions from `arc.ini` and
-runs `arc.*.lua` event hooks (Lua 5.1). The GTK3 GUI follows; see
-[`docs/PLAN.md`](docs/PLAN.md).
+**Status: 0.1.0 pre-release.** The console archiver is feature complete for the
+core workflow and verified against the original binary; the GTK3 GUI runs on
+Linux and is not packaged for Windows yet.
+
+## Install (Windows)
+
+Download the pre-release installer from
+[Releases](https://github.com/YadeWira/FreeArc-ex/releases/tag/v0.1.0-pre):
+`FreeArc-ex-0.1.0-pre-setup.exe` (64-bit, Inno Setup 7.1.0, classic wizard like
+the original FreeArc setup). It installs `arc-ex.exe`, `arc.groups` and the
+docs, with an optional PATH entry and desktop shortcut.
+
+It is beta software: use it on copies of your files.
+
+## Screenshots
+
+![FreeArc-ex GUI](docs/images/gui-m5.png)
 
 ## Targets
 
@@ -30,13 +31,12 @@ runs `arc.*.lua` event hooks (Lua 5.1). The GTK3 GUI follows; see
 
 - Read and write compatibility with FreeArc 0.67.1 `.arc` archives.
 - CLI with option and exit-code parity with `arc.exe` 0.67.1.
-- `arc.ini` and Lua 5.1 scripts, SFX/`unarc.dll`, Explorer extension, and
-  opening `.7z`/`.zip`/`.rar`.
-- GTK3 GUI (gtkmm 3.24) with feature parity with the original GUI.
-- Updated codecs: modern LZMA SDK, LZ4 1.10, LibTomCrypt 1.18.2, and no
-  x86-specific assembly.
-
-![FreeArc-ex GUI (first slice)](docs/images/gui-m5.png)
+- GTK3 GUI (gtkmm 3.24).
+- FreeArc's own codecs, kept as-is: `lzma`, `rep`, `4x4`, `tor`, `dict`, `lzp`,
+  `grzip`, `tta`, `mm`, `delta`, `exe`, `dispack`, `ppmd`, in any chain.
+- Encryption (`-p`, `-hp`) with AES, Blowfish, Serpent and Twofish; recovery
+  record (`-rr`) and repair (`r`).
+- `arc.ini` method definitions and `arc.*.lua` event hooks (Lua 5.1).
 
 ## Building
 
@@ -60,21 +60,44 @@ cmake --build build/gui -j
 ./build/gui/src/gui/freearc-ex archive.arc
 ```
 
-Dependencies and cross-verification details are in [`docs/BUILD.md`](docs/BUILD.md).
+Windows installer:
+
+```sh
+scripts/package-windows.sh x64            # stages the mingw build
+cd packaging/windows && ISCC.exe freearc-ex.iss
+```
+
+Details in [`docs/BUILD.md`](docs/BUILD.md) and [`docs/INSTALLER.md`](docs/INSTALLER.md).
+
+## What works today
+
+- `a`, `u`, `f`, `d`, `l`, `lb`, `t`, `x`, `r`; masks, `-x`, `-o+/-`, `-dp`,
+  `-ad`, `-ap`, `-ep`, `-ae`, `-ma`, `-dm`, `-s` (solid blocks), `-rr`,
+  `-p`/`-hp`, `-cfg`.
+- Presets `-m0`..`-m9` resolved through FreeArc's definition table and
+  `arc.groups` classes, with one solid block per resolved method.
+- Updates keep the original file order, reuse untouched blocks in place and
+  match the original's block structure.
+- Differential tests against `arc.exe` 0.67.1 for reading, writing, updating,
+  solid blocks, encryption and recovery.
+
+Not yet: the GTK3 GUI for Windows (needs MSYS2), SFX modules, the Explorer shell
+extension, multi-volume archives. See [`docs/COMPAT.md`](docs/COMPAT.md) for the
+full compatibility statement.
 
 ## Layout
 
 ```
 src/core/      .arc format engine (C++20)
-src/codecs/    codecs inherited from FreeArc 0.67, being modernized
+src/codecs/    FreeArc 0.67 codecs, unmodified
 src/cli/       arc-ex
-src/gui/       freearc-ex (gtkmm 3.24, milestone M5)
-src/lua/       embedded Lua 5.1 (script compatibility)
+src/gui/       freearc-ex (gtkmm 3.24)
+src/lua/       embedded Lua 5.1 (event scripts)
 src/unarc/     SFX, unarc.dll and 7z-unarc (Windows)
 src/shellext/  Explorer COM extension (Windows)
-legacy/        original FreeArc 0.67 sources: Haskell (reference) and HsLua
+legacy/        original FreeArc 0.67 sources (Haskell reference, not compiled)
 docs/          plan, decisions, compatibility notes and original documentation
-tests/         unit tests and the compatibility harness against arc.exe
+tests/         unit tests and the differential harness against arc.exe
 ```
 
 ## License
