@@ -12,6 +12,9 @@
 #include <thread>
 #include <vector>
 
+#include <fstream>
+#include <cstdlib>
+
 #include "fa/arc.h"
 #include "fa/arc_writer.h"
 #include "fa/crypto.h"
@@ -53,6 +56,45 @@ public:
     Gtk::TreeModelColumn<std::string> name;
     Gtk::TreeModelColumn<std::string> path;
 };
+
+std::filesystem::path config_file()
+{
+    const char* home = std::getenv("HOME");
+    return std::filesystem::path(home ? home : ".") / ".config" / "freearc-ex" / "gui.ini";
+}
+
+struct UiConfig {
+    int width = 980;
+    int height = 620;
+    std::string last_dir;
+};
+
+UiConfig load_config()
+{
+    UiConfig config;
+    std::ifstream in(config_file());
+    std::string line;
+    while (std::getline(in, line)) {
+        const std::size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = line.substr(0, eq);
+        const std::string value = line.substr(eq + 1);
+        if (key == "width") config.width = std::atoi(value.c_str());
+        else if (key == "height") config.height = std::atoi(value.c_str());
+        else if (key == "dir") config.last_dir = value;
+    }
+    return config;
+}
+
+void save_config(const UiConfig& config)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(config_file().parent_path(), ec);
+    std::ofstream out(config_file(), std::ios::trunc);
+    out << "width=" << config.width << "\n";
+    out << "height=" << config.height << "\n";
+    out << "dir=" << config.last_dir << "\n";
+}
 
 std::string format_size(std::uint64_t bytes)
 {
@@ -161,6 +203,9 @@ private:
 
     std::unique_ptr<fa::Archive> archive_;
     std::string archive_path_;
+    UiConfig config_;
+
+    bool on_key_press(GdkEventKey* event);
 
     struct ProgressState {
         std::atomic<std::uint64_t> done{0};
@@ -176,8 +221,17 @@ private:
 
 MainWindow::MainWindow()
 {
+    config_ = load_config();
     set_title("FreeArc-ex");
-    set_default_size(980, 620);
+    set_default_size(config_.width, config_.height);
+    signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_key_press), false);
+    signal_delete_event().connect([this](GdkEventAny*) {
+        config_.width = get_width();
+        config_.height = get_height();
+        config_.last_dir = disk_dir_;
+        save_config(config_);
+        return false;  // let the default handler close the window
+    });
     build_ui();
     refresh_status();
     status_.push("Open an archive or create a new one");
@@ -387,7 +441,7 @@ void MainWindow::build_ui()
             context->drag_finish(true, false, time);
         });
 
-    navigate_disk(Glib::get_current_dir());
+    navigate_disk(config_.last_dir.empty() ? Glib::get_current_dir() : config_.last_dir);
 
     box_.pack_start(search_, Gtk::PACK_SHRINK);
     box_.pack_start(paned_, Gtk::PACK_EXPAND_WIDGET);
@@ -403,6 +457,7 @@ void MainWindow::navigate_disk(const std::string& dir)
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec)) return;
     disk_dir_ = std::filesystem::absolute(dir).lexically_normal().string();
+    config_.last_dir = disk_dir_;
     disk_path_.set_text(disk_dir_);
 
     disk_model_->clear();
@@ -478,12 +533,17 @@ void MainWindow::on_selection_changed()
         clear_details();
         return;
     }
+    if (rows.size() > 1) {
+        status_.push(std::to_string(rows.size()) + " entries selected");
+        return;
+    }
     auto iter = filter_->get_iter(rows.front());
     const auto& row = *iter;
     const std::string name = row[columns_.name];
     const std::string size = row[columns_.size];
     const std::string date = row[columns_.date];
     set_details(name, size, date);
+    status_.push(name + " — " + size + " — " + date);
 }
 
 void MainWindow::on_search_changed()
@@ -622,6 +682,26 @@ void MainWindow::run_operation(
     worker.join();
 }
 
+bool MainWindow::on_key_press(GdkEventKey* event)
+{
+    const bool ctrl = (event->state & GDK_CONTROL_MASK) != 0;
+    if (ctrl) {
+        switch (event->keyval) {
+            case GDK_KEY_o: on_open(); return true;
+            case GDK_KEY_n: on_new_archive(); return true;
+            case GDK_KEY_e: on_extract(); return true;
+            case GDK_KEY_t: on_test(); return true;
+            case GDK_KEY_q: on_quit(); return true;
+            default: break;
+        }
+    }
+    if (event->keyval == GDK_KEY_F5) {
+        on_test();
+        return true;
+    }
+    return false;
+}
+
 void MainWindow::on_open()
 {
     Gtk::FileChooserDialog dialog(*this, "Open archive", Gtk::FILE_CHOOSER_ACTION_OPEN);
@@ -680,10 +760,31 @@ void MainWindow::on_new_archive()
     password->set_visibility(false);
     password->set_placeholder_text("(none)");
 
+    auto* solid_label = Gtk::manage(new Gtk::Label("Solid blocks:"));
+    solid_label->set_halign(Gtk::ALIGN_START);
+    auto* solid = Gtk::manage(new Gtk::ComboBoxText());
+    for (const char* item : {"all together", "one file per block", "2 files", "8 files"}) {
+        solid->append(item);
+    }
+    solid->set_active(0);
+
+    auto* recovery_label = Gtk::manage(new Gtk::Label("Recovery record:"));
+    recovery_label->set_halign(Gtk::ALIGN_START);
+    auto* recovery = Gtk::manage(new Gtk::Entry());
+    recovery->set_placeholder_text("(none, e.g. 4%)");
+
+    auto* encrypt_headers = Gtk::manage(new Gtk::CheckButton("Encrypt the header and directory (-hp)"));
+    encrypt_headers->set_halign(Gtk::ALIGN_START);
+
     grid->attach(*method_label, 0, 0, 1, 1);
     grid->attach(*methods, 1, 0, 1, 1);
     grid->attach(*password_label, 0, 1, 1, 1);
     grid->attach(*password, 1, 1, 1, 1);
+    grid->attach(*solid_label, 0, 2, 1, 1);
+    grid->attach(*solid, 1, 2, 1, 1);
+    grid->attach(*recovery_label, 0, 3, 1, 1);
+    grid->attach(*recovery, 1, 3, 1, 1);
+    grid->attach(*encrypt_headers, 1, 4, 1, 1);
     options.get_content_area()->add(*grid);
     options.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
     options.add_button("_Create", Gtk::RESPONSE_OK);
@@ -693,12 +794,21 @@ void MainWindow::on_new_archive()
     std::string method = methods->get_active_text();
     if (method.rfind("0 (", 0) == 0) method = "storing";
     const std::string pass = password->get_text();
+    const int solid_index = solid->get_active_row_number();
+    const std::string recovery_text = recovery->get_text();
+    const bool hp = encrypt_headers->get_active() && !pass.empty();
 
-    run_operation("Create archive", [this, archive, input, method, pass](const fa::ProgressFn& p,
-                                                                        std::string& error) {
+    run_operation("Create archive", [this, archive, input, method, pass, solid_index, recovery_text,
+                                     hp](const fa::ProgressFn& p, std::string& error) {
         fa::AddOptions add;
         add.method = method;
         add.progress = p;
+        add.recovery = recovery_text;
+        add.recovery_present = !recovery_text.empty();
+        add.header_encryption = hp;
+        if (solid_index == 1) add.solid = {{fa::SolidRule::Kind::None, 0}};
+        else if (solid_index == 2) add.solid = {{fa::SolidRule::Kind::Files, 2}};
+        else if (solid_index == 3) add.solid = {{fa::SolidRule::Kind::Files, 8}};
         if (!pass.empty()) fa::set_password(pass);
         if (!fa::create_archive(archive, {input}, add, error)) return false;
         open(archive);
