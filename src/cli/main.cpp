@@ -424,6 +424,10 @@ static int run(int argc, char** argv)
                 method_given = true;
             } else if (arg.rfind("-dm", 0) == 0) {
                 options.directory_method = std::string(arg.substr(3));
+            } else if (arg.rfind("-ae", 0) == 0) {
+                options.encryption_algorithm = std::string(arg.substr(3));
+            } else if (arg.rfind("-ap", 0) == 0) {
+                options.archive_prefix = std::string(arg.substr(3));
             } else if (arg.rfind("-cfg", 0) == 0) {
                 cfg_file = std::string(arg.substr(4));
             } else if (arg.rfind("-rr", 0) == 0) {
@@ -517,6 +521,7 @@ static int run(int argc, char** argv)
     std::vector<std::string> masks;
     std::vector<std::string> excludes;
     bool overwrite = true;
+    bool add_dir = false;
     for (int i = 2; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg.rfind("-hp", 0) == 0) {
@@ -531,6 +536,8 @@ static int run(int argc, char** argv)
             overwrite = false;
         } else if (arg == "-o+" || arg == "-y") {
             overwrite = true;
+        } else if (arg == "-ad") {
+            add_dir = true;
         } else if (!arg.empty() && arg[0] == '-') {
             std::fprintf(stderr, "arc-ex: unknown option '%.*s'\n", static_cast<int>(arg.size()),
                          arg.data());
@@ -566,6 +573,14 @@ static int run(int argc, char** argv)
             std::printf("%s\n", file.name.c_str());
         }
         return 0;
+    }
+    if (add_dir) {
+        // -ad: extract under a directory named after the archive.
+        const std::string stem = std::filesystem::path(archive_path).filename().string();
+        const std::size_t dot = stem.find_last_of('.');
+        output_dir = (std::filesystem::path(output_dir) /
+                      (dot == std::string::npos ? stem : stem.substr(0, dot)))
+                         .string();
     }
     return process_archive(archive, output_dir, command == "x", masks, excludes, overwrite);
 }

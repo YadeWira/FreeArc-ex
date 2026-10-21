@@ -182,11 +182,35 @@ bool derive_encryption_key(std::string& method, std::string& error)
     return true;
 }
 
-bool make_encryption_stage(unsigned key_bits, const std::string& pwd, std::string& with_key,
-                           std::string& stored, std::string& error)
+bool make_encryption_stage(const std::string& algorithm, const std::string& pwd,
+                           std::string& with_key, std::string& stored, std::string& error)
 {
+    // Cipher defaults from the format spec (7.3.2): AES and serpent/twofish use
+    // 16-byte blocks, blowfish 8; key sizes are the cipher maxima unless the
+    // user appends "-<bits>".
+    std::string name = algorithm;
+    unsigned key_bits = 0;
+    const std::size_t dash = algorithm.find('-');
+    if (dash != std::string::npos) {
+        name = algorithm.substr(0, dash);
+        key_bits = static_cast<unsigned>(std::atoi(algorithm.c_str() + dash + 1));
+    }
+    unsigned iv_size = 16;
+    if (key_bits == 0) {
+        if (name == "blowfish") {
+            key_bits = 448;
+            iv_size = 8;
+        } else if (name == "aes") {
+            key_bits = 256;
+        } else if (name == "serpent" || name == "twofish") {
+            key_bits = 256;
+        } else {
+            error = "unknown encryption algorithm '" + algorithm + "'";
+            return false;
+        }
+    }
+    if (name == "blowfish") iv_size = 8;
     const unsigned key_size = key_bits / 8;
-    const unsigned iv_size = 16;
     const int iterations = 1000;
 
     const auto salt = random_bytes(key_size);
@@ -199,8 +223,7 @@ bool make_encryption_stage(unsigned key_bits, const std::string& pwd, std::strin
     const std::vector<unsigned char> key(derived.begin(), derived.begin() + key_size);
     const std::vector<unsigned char> check(derived.begin() + key_size, derived.end());
 
-    const std::string head = (key_bits == 256 ? "aes-256" : "aes-" + std::to_string(key_bits)) +
-                             "/ctr";
+    const std::string head = name + "-" + std::to_string(key_bits) + "/ctr";
     const std::string common = head + ":n" + std::to_string(iterations) + ":r0:i" + to_hex(iv) +
                                ":s" + to_hex(salt) + ":c" + to_hex(check);
 

@@ -51,4 +51,17 @@ if [ "$code" -ne 21 ]; then
     exit 1
 fi
 
+# -ap (archive prefix) and -ad (extract under a directory named after the archive).
+"$arc_ex" a prefixed.arc src -mlzma -apbase >/dev/null
+"$arc_ex" lb prefixed.arc | tr -d '\r' | grep -qx 'base/src/a.txt' || {
+    echo "FAIL: -ap did not prefix the names"; exit 1; }
+mkdir out_ad
+"$arc_ex" x prefixed.arc -dpout_ad -ad >/dev/null
+test -f out_ad/prefixed/base/src/a.txt || { echo "FAIL: -ad extraction path"; exit 1; }
+
+# -ae: another cipher.
+"$arc_ex" a bf.arc src -mlzma -pclave -aeblowfish >/dev/null
+"$arc_ex" lt bf.arc | grep -q 'blowfish-448' || { echo "FAIL: -ae ignored"; exit 1; }
+"$arc_ex" t bf.arc -pclave >/dev/null
+
 echo "cli OK"

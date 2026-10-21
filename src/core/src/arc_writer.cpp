@@ -253,6 +253,7 @@ bool build_recovery(const std::string& text, const std::vector<Span>& spans, std
 // Prepares a control block for writing: with -hp it is encrypted with its own
 // salt and IV, and the stored method keeps everything except the key.
 bool prepare_control_block(const std::vector<std::uint8_t>& plain, bool encrypt,
+                           const std::string& algorithm,
                            std::vector<std::uint8_t>& stored_data, std::string& stored_method,
                            std::string& error)
 {
@@ -263,7 +264,7 @@ bool prepare_control_block(const std::vector<std::uint8_t>& plain, bool encrypt,
     }
     std::string with_key;
     std::string stored_stage;
-    if (!make_encryption_stage(256, password(), with_key, stored_stage, error)) return false;
+    if (!make_encryption_stage(algorithm, password(), with_key, stored_stage, error)) return false;
     if (!codec_compress("storing+" + with_key, plain.data(), plain.size(), stored_data, error)) {
         return false;
     }
@@ -304,7 +305,8 @@ bool create_archive(const std::filesystem::path& archive,
 {
     std::vector<Entry> entries;
     for (const auto& input : inputs) {
-        const std::string name = normalize_name(input);
+        std::string name = normalize_name(input);
+        if (!options.archive_prefix.empty()) name = options.archive_prefix + "/" + name;
         if (name.empty()) {
             error = "invalid input path '" + input.string() + "'";
             return false;
@@ -545,7 +547,8 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
             std::string with_key;
             std::string stored;
             std::string crypto_error;
-            if (!make_encryption_stage(256, password(), with_key, stored, crypto_error)) {
+            if (!make_encryption_stage(options.encryption_algorithm, password(), with_key, stored,
+                                       crypto_error)) {
                 error = crypto_error;
                 return false;
             }
@@ -564,8 +567,8 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
 
     std::vector<std::uint8_t> header_stored;
     std::string header_method;
-    if (!prepare_control_block(header, options.header_encryption, header_stored, header_method,
-                               error)) {
+    if (!prepare_control_block(header, options.header_encryption, options.encryption_algorithm,
+                               header_stored, header_method, error)) {
         return false;
     }
     const auto header_descr =
@@ -628,7 +631,8 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     if (options.header_encryption) {
         std::string with_key;
         std::string stored_stage;
-        if (!make_encryption_stage(256, password(), with_key, stored_stage, error)) return false;
+        const std::string& algorithm = options.encryption_algorithm;
+        if (!make_encryption_stage(algorithm, password(), with_key, stored_stage, error)) return false;
         if (!codec_compress(dir_method + "+" + with_key, dir_data.data(), dir_data.size(),
                             dir_stored, error)) {
             return false;
