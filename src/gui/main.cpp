@@ -1,5 +1,6 @@
 // FreeArc-ex GUI: GTK3 (gtkmm 3.24) front end over the same core the CLI uses.
-// Milestone M5, first slice: open an .arc, list its contents, extract it.
+// Modern layout: header bar, searchable archive listing with icons, details
+// panel and the archive operations (create, update, test, extract).
 #include <gtkmm.h>
 
 #include <atomic>
@@ -9,26 +10,28 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "fa/arc.h"
-#include "fa/ops.h"
 #include "fa/arc_writer.h"
-#include "fa/update.h"
 #include "fa/crypto.h"
+#include "fa/ops.h"
+#include "fa/update.h"
 
 namespace {
 
-// Row of the archive listing.
 class EntryModelColumns : public Gtk::TreeModel::ColumnRecord {
 public:
     EntryModelColumns()
     {
+        add(icon);
         add(directory);
         add(size);
         add(date);
         add(name);
     }
 
+    Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> icon;
     Gtk::TreeModelColumn<bool> directory;
     Gtk::TreeModelColumn<std::string> size;
     Gtk::TreeModelColumn<std::string> date;
@@ -37,9 +40,22 @@ public:
 
 std::string format_size(std::uint64_t bytes)
 {
-    char buffer[64];
-    std::snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(bytes));
-    return buffer;
+    if (bytes >= 1024ull * 1024 * 1024) {
+        return Glib::ustring::format(std::fixed, std::setprecision(1),
+                                     static_cast<double>(bytes) / (1024.0 * 1024 * 1024)) +
+               " GiB";
+    }
+    if (bytes >= 1024ull * 1024) {
+        return Glib::ustring::format(std::fixed, std::setprecision(1),
+                                     static_cast<double>(bytes) / (1024.0 * 1024)) +
+               " MiB";
+    }
+    if (bytes >= 1024) {
+        return Glib::ustring::format(std::fixed, std::setprecision(1),
+                                     static_cast<double>(bytes) / 1024.0) +
+               " KiB";
+    }
+    return std::to_string(bytes) + " B";
 }
 
 std::string format_date(std::int32_t seconds)
@@ -64,33 +80,57 @@ public:
     void open(const std::string& path);
 
 private:
+    void build_ui();
     void on_open();
-    void on_quit();
-    void on_about();
-    void on_test();
-    void on_extract();
     void on_new_archive();
     void on_add_folder();
+    void on_extract();
+    void on_test();
+    void on_about();
+    void on_quit();
+    void refresh();
     void refresh_status();
+    void on_selection_changed();
+    void on_search_changed();
+    void set_details(const Glib::ustring& name, const Glib::ustring& size,
+                     const Glib::ustring& date);
+    void clear_details();
 
-    // Runs an archive operation in a worker thread with a progress dialog.
-    // `operation` receives a progress callback and returns true on success.
     void run_operation(const std::string& title,
                        const std::function<bool(const fa::ProgressFn&, std::string&)>& operation);
 
+    // Header bar and controls.
+    Gtk::HeaderBar header_;
+    Gtk::Button new_button_{"New"};
+    Gtk::Button open_button_{"Open"};
+    Gtk::Button add_button_{"Add"};
+    Gtk::Button extract_button_{"Extract"};
+    Gtk::Button test_button_{"Test"};
+    Gtk::MenuButton menu_button_;
+    Glib::RefPtr<Gio::Menu> menu_model_;
+
+    // Layout.
     Gtk::Box box_{Gtk::ORIENTATION_VERTICAL};
-    Gtk::MenuBar menu_;
+    Gtk::SearchEntry search_;
+    Gtk::Paned paned_{Gtk::ORIENTATION_HORIZONTAL};
     Gtk::ScrolledWindow scroll_;
     Gtk::TreeView view_;
+
+    // Details panel.
+    Gtk::Box details_{Gtk::ORIENTATION_VERTICAL};
+    Gtk::Label details_title_;
+    Gtk::Label details_size_;
+    Gtk::Label details_date_;
+
     Gtk::Statusbar status_;
 
     EntryModelColumns columns_;
     Glib::RefPtr<Gtk::ListStore> model_;
+    Glib::RefPtr<Gtk::TreeModelFilter> filter_;
 
     std::unique_ptr<fa::Archive> archive_;
     std::string archive_path_;
 
-    // Shared with the worker thread while an operation runs.
     struct ProgressState {
         std::atomic<std::uint64_t> done{0};
         std::atomic<std::uint64_t> total{0};
@@ -106,101 +146,191 @@ private:
 MainWindow::MainWindow()
 {
     set_title("FreeArc-ex");
-    set_default_size(720, 480);
+    set_default_size(980, 620);
+    build_ui();
+    refresh_status();
+    status_.push("Open an archive or create a new one");
+}
 
-    // File menu.
-    auto* file_item = Gtk::manage(new Gtk::MenuItem("_File", true));
-    Gtk::Menu* file_menu = Gtk::manage(new Gtk::Menu());
-    {
-        auto* new_item = Gtk::manage(new Gtk::MenuItem("_New archive...", true));
-        new_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_new_archive));
-        file_menu->append(*new_item);
+void MainWindow::build_ui()
+{
+    // A light CSS layer: rounded header, comfortable rows and a subtle details
+    // card. Everything degrades gracefully if the theme does not support it.
+    auto css = Gtk::CssProvider::create();
+    css->load_from_data(
+        "headerbar { min-height: 44px; }\n"
+        "treeview.view { padding: 2px; }\n"
+        "treeview.view:selected { border-radius: 6px; }\n"
+        ".details-card { background-color: alpha(currentColor, 0.04); border-radius: 10px; "
+        "padding: 14px; }\n"
+        ".details-title { font-weight: bold; font-size: 1.1em; }\n"
+        ".dim-label { opacity: 0.65; }\n");
+    Gtk::StyleContext::add_provider_for_screen(Gdk::Screen::get_default(), css,
+                                               GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-        auto* open_item = Gtk::manage(new Gtk::MenuItem("_Open archive...", true));
-        open_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_open));
-        file_menu->append(*open_item);
+    // Header bar.
+    set_titlebar(header_);
+    header_.set_show_close_button(true);
+    header_.pack_start(new_button_);
+    header_.pack_start(open_button_);
+    header_.pack_start(add_button_);
+    header_.pack_start(extract_button_);
+    header_.pack_start(test_button_);
+    header_.set_custom_title(*Gtk::manage(new Gtk::Label("FreeArc-ex")));
 
-        auto* quit_item = Gtk::manage(new Gtk::MenuItem("_Quit", true));
-        quit_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_quit));
-        file_menu->append(*quit_item);
-    }
-    file_item->set_submenu(*file_menu);
-    menu_.append(*file_item);
+    auto menu = Gio::Menu::create();
+    menu->append("_About", "app.about");
+    menu->append("_Quit", "app.quit");
+    menu_model_ = menu;
+    menu_button_.set_menu_model(menu_model_);
+    menu_button_.set_image_from_icon_name("open-menu-symbolic");
+    header_.pack_end(menu_button_);
 
-    // Actions menu.
-    auto* actions_item = Gtk::manage(new Gtk::MenuItem("_Actions", true));
-    Gtk::Menu* actions_menu = Gtk::manage(new Gtk::Menu());
-    {
-        auto* test_item = Gtk::manage(new Gtk::MenuItem("_Test archive", true));
-        test_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_test));
-        actions_menu->append(*test_item);
+    // Actions for the menu button.
+    auto about_action = Gio::SimpleAction::create("about");
+    about_action->signal_activate().connect([this](const Glib::VariantBase&) { on_about(); });
+    add_action(about_action);
+    auto quit_action = Gio::SimpleAction::create("quit");
+    quit_action->signal_activate().connect([this](const Glib::VariantBase&) { on_quit(); });
+    add_action(quit_action);
 
-        auto* extract_item = Gtk::manage(new Gtk::MenuItem("_Extract to...", true));
-        extract_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_extract));
-        actions_menu->append(*extract_item);
-    }
-    actions_item->set_submenu(*actions_menu);
-    menu_.append(*actions_item);
+    new_button_.set_tooltip_text("Create a new archive");
+    open_button_.set_tooltip_text("Open an archive");
+    add_button_.set_tooltip_text("Add a folder to the open archive");
+    extract_button_.set_tooltip_text("Extract the archive or the selected files");
+    test_button_.set_tooltip_text("Test the archive integrity");
+    new_button_.set_image_from_icon_name("document-new-symbolic");
+    open_button_.set_image_from_icon_name("document-open-symbolic");
+    add_button_.set_image_from_icon_name("list-add-symbolic");
+    extract_button_.set_image_from_icon_name("document-save-symbolic");
+    test_button_.set_image_from_icon_name("dialog-ok-symbolic");
+    new_button_.set_always_show_image(true);
+    open_button_.set_always_show_image(true);
+    add_button_.set_always_show_image(true);
+    extract_button_.set_always_show_image(true);
+    test_button_.set_always_show_image(true);
 
-    // Help menu.
-    auto* help_item = Gtk::manage(new Gtk::MenuItem("_Help", true));
-    Gtk::Menu* help_menu = Gtk::manage(new Gtk::Menu());
-    {
-        auto* about_item = Gtk::manage(new Gtk::MenuItem("_About", true));
-        about_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_about));
-        help_menu->append(*about_item);
-    }
-    help_item->set_submenu(*help_menu);
-    menu_.append(*help_item);
+    new_button_.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_new_archive));
+    open_button_.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_open));
+    add_button_.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_add_folder));
+    extract_button_.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_extract));
+    test_button_.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_test));
 
-    // Toolbar.
-    auto* toolbar = Gtk::manage(new Gtk::Toolbar());
-    toolbar->set_toolbar_style(Gtk::ToolbarStyle::TOOLBAR_TEXT);
-    {
-        auto add_button = [&](const char* label, void (MainWindow::*handler)()) {
-            auto* item = Gtk::manage(new Gtk::ToolButton(label));
-            item->signal_clicked().connect(sigc::mem_fun(*this, handler));
-            toolbar->append(*item);
-        };
-        add_button("New", &MainWindow::on_new_archive);
-        add_button("Open", &MainWindow::on_open);
-        add_button("Add...", &MainWindow::on_add_folder);
-        add_button("Extract...", &MainWindow::on_extract);
-        add_button("Test", &MainWindow::on_test);
-        toolbar->append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-        add_button("Quit", &MainWindow::on_quit);
-    }
+    // Search + listing.
+    search_.set_placeholder_text("Filter by name...");
+    search_.set_margin_top(8);
+    search_.set_margin_bottom(4);
+    search_.set_margin_start(10);
+    search_.set_margin_end(10);
+    search_.signal_search_changed().connect(sigc::mem_fun(*this, &MainWindow::on_search_changed));
 
-    // Listing.
     model_ = Gtk::ListStore::create(columns_);
-    view_.set_model(model_);
+    filter_ = Gtk::TreeModelFilter::create(model_);
+    filter_->set_visible_func([this](const Gtk::TreeModel::const_iterator& iter) {
+        const Glib::ustring query = search_.get_text();
+        if (query.empty()) return true;
+        const std::string name = (*iter)[columns_.name];
+        return Glib::ustring(name).lowercase().find(query.lowercase()) != Glib::ustring::npos;
+    });
+
+    view_.set_model(filter_);
+    view_.set_headers_visible(true);
+    view_.set_enable_search(false);
+
+    int icon_width = 0;
+    view_.append_column("", columns_.icon);
+    auto* icon_renderer = dynamic_cast<Gtk::CellRendererPixbuf*>(
+        view_.get_column(0)->get_first_cell());
+    (void)icon_width;
+    (void)icon_renderer;
+    view_.get_column(0)->set_sizing(Gtk::TREE_VIEW_COLUMN_FIXED);
+    view_.get_column(0)->set_fixed_width(32);
+
     view_.append_column("Name", columns_.name);
     view_.append_column("Size", columns_.size);
     view_.append_column("Date", columns_.date);
-    view_.set_headers_visible(true);
-
-    // Sortable columns and multiple selection.
-    view_.get_column(0)->set_sort_column(columns_.name);
-    view_.get_column(1)->set_sort_column(columns_.size);
-    view_.get_column(2)->set_sort_column(columns_.date);
+    view_.get_column(1)->set_expand(true);
+    view_.get_column(1)->set_sort_column(columns_.name);
+    view_.get_column(2)->set_sort_column(columns_.size);
+    view_.get_column(3)->set_sort_column(columns_.date);
     view_.get_selection()->set_mode(Gtk::SELECTION_MULTIPLE);
-    // Double click extracts the selection (or the whole archive).
-    view_.signal_row_activated().connect([this](const Gtk::TreeModel::Path&, Gtk::TreeViewColumn*) {
-        on_extract();
-    });
+    view_.get_selection()->signal_changed().connect(
+        sigc::mem_fun(*this, &MainWindow::on_selection_changed));
+    view_.signal_row_activated().connect(
+        [this](const Gtk::TreeModel::Path&, Gtk::TreeViewColumn*) { on_extract(); });
 
     scroll_.add(view_);
     scroll_.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     scroll_.set_vexpand(true);
 
-    box_.pack_start(menu_, Gtk::PACK_SHRINK);
-    box_.pack_start(*toolbar, Gtk::PACK_SHRINK);
-    box_.pack_start(scroll_, Gtk::PACK_EXPAND_WIDGET);
+    // Details panel.
+    details_.set_margin_top(10);
+    details_.set_margin_bottom(10);
+    details_.set_margin_start(10);
+    details_.set_margin_end(10);
+    details_.set_spacing(6);
+    auto* card = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 6));
+    card->get_style_context()->add_class("details-card");
+
+    details_title_.get_style_context()->add_class("details-title");
+    details_title_.set_halign(Gtk::ALIGN_START);
+    details_title_.set_line_wrap(true);
+    details_size_.get_style_context()->add_class("dim-label");
+    details_size_.set_halign(Gtk::ALIGN_START);
+    details_date_.get_style_context()->add_class("dim-label");
+    details_date_.set_halign(Gtk::ALIGN_START);
+    card->pack_start(details_title_, Gtk::PACK_SHRINK);
+    card->pack_start(details_size_, Gtk::PACK_SHRINK);
+    card->pack_start(details_date_, Gtk::PACK_SHRINK);
+    details_.pack_start(*card, Gtk::PACK_SHRINK);
+    details_.pack_start(*Gtk::manage(new Gtk::Label()), Gtk::PACK_EXPAND_WIDGET);
+
+    paned_.pack1(scroll_, true, true);
+    paned_.pack2(details_, false, false);
+    paned_.set_position(680);
+
+    box_.pack_start(search_, Gtk::PACK_SHRINK);
+    box_.pack_start(paned_, Gtk::PACK_EXPAND_WIDGET);
     box_.pack_end(status_, Gtk::PACK_SHRINK);
     add(box_);
 
+    clear_details();
     show_all_children();
-    status_.push("Open an archive to see its contents");
+}
+
+void MainWindow::set_details(const Glib::ustring& name, const Glib::ustring& size,
+                             const Glib::ustring& date)
+{
+    details_title_.set_text(name);
+    details_size_.set_text(size);
+    details_date_.set_text(date);
+}
+
+void MainWindow::clear_details()
+{
+    details_title_.set_text("No selection");
+    details_size_.set_text("");
+    details_date_.set_text("");
+}
+
+void MainWindow::on_selection_changed()
+{
+    const auto rows = view_.get_selection()->get_selected_rows();
+    if (rows.empty()) {
+        clear_details();
+        return;
+    }
+    auto iter = filter_->get_iter(rows.front());
+    const auto& row = *iter;
+    const std::string name = row[columns_.name];
+    const std::string size = row[columns_.size];
+    const std::string date = row[columns_.date];
+    set_details(name, size, date);
+}
+
+void MainWindow::on_search_changed()
+{
+    filter_->refilter();
 }
 
 void MainWindow::refresh_status()
@@ -221,19 +351,55 @@ void MainWindow::refresh_status()
                  std::to_string(bytes) + " byte(s)");
 }
 
+void MainWindow::open(const std::string& path)
+{
+    auto loaded = std::make_unique<fa::Archive>();
+    std::string error;
+    if (!fa::Archive::open(path, *loaded, error)) {
+        Gtk::MessageDialog dialog(*this, error, false, Gtk::MESSAGE_ERROR);
+        dialog.run();
+        return;
+    }
+
+    archive_ = std::move(loaded);
+    archive_path_ = path;
+    refresh();
+
+    set_title("FreeArc-ex — " + std::filesystem::path(path).filename().string());
+    refresh_status();
+}
+
+void MainWindow::refresh()
+{
+    model_->clear();
+    if (!archive_) return;
+
+    for (const auto& entry : archive_->info().files) {
+        auto row = *model_->append();
+        row[columns_.name] = entry.is_dir ? entry.name + "/" : entry.name;
+        row[columns_.size] = entry.is_dir ? "-" : format_size(entry.size);
+        row[columns_.date] = format_date(entry.mtime);
+        row[columns_.directory] = entry.is_dir;
+        row[columns_.icon] = Gtk::IconTheme::get_default()->load_icon(
+            entry.is_dir ? "folder" : "text-x-generic", 16);
+    }
+    clear_details();
+}
+
 void MainWindow::run_operation(
     const std::string& title, const std::function<bool(const fa::ProgressFn&, std::string&)>& operation)
 {
     auto state = std::make_shared<ProgressState>();
     auto dialog = std::make_shared<Gtk::Dialog>(title, *this, true);
-    dialog->set_default_size(420, -1);
-    auto* box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 8));
-    box->set_margin_top(12);
-    box->set_margin_bottom(12);
-    box->set_margin_start(12);
-    box->set_margin_end(12);
+    dialog->set_default_size(460, -1);
+    auto* box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 10));
+    box->set_margin_top(16);
+    box->set_margin_bottom(16);
+    box->set_margin_start(16);
+    box->set_margin_end(16);
     auto* label = Gtk::manage(new Gtk::Label("Working..."));
     label->set_halign(Gtk::ALIGN_START);
+    label->set_ellipsize(Pango::ELLIPSIZE_MIDDLE);
     auto* bar = Gtk::manage(new Gtk::ProgressBar());
     bar->set_show_text(true);
     box->pack_start(*label, Gtk::PACK_SHRINK);
@@ -246,7 +412,6 @@ void MainWindow::run_operation(
     });
     dialog->show_all();
 
-    // Worker thread: runs the core operation and reports progress.
     std::thread worker([state, operation, this]() {
         std::string error;
         const bool ok = operation(
@@ -266,10 +431,9 @@ void MainWindow::run_operation(
         state->finished = true;
     });
 
-    // UI polling.
-    auto finished = std::make_shared<bool>(false);
+    auto done_once = std::make_shared<bool>(false);
     Glib::signal_timeout().connect(
-        [state, bar, label, dialog, finished, this]() {
+        [state, bar, label, dialog, done_once, this]() {
             const std::uint64_t total = state->total;
             const std::uint64_t done = state->done;
             if (total > 0) {
@@ -281,10 +445,9 @@ void MainWindow::run_operation(
                 if (!state->current.empty()) label->set_text(state->current);
             }
             if (!state->finished) return true;
-
             dialog->hide();
-            if (!*finished) {
-                *finished = true;
+            if (!*done_once) {
+                *done_once = true;
                 if (!state->ok && !state->cancel) {
                     std::lock_guard<std::mutex> lock(state->mutex);
                     Gtk::MessageDialog message(*this, state->error, false, Gtk::MESSAGE_ERROR);
@@ -299,6 +462,24 @@ void MainWindow::run_operation(
     dialog->run();
     state->cancel = true;
     worker.join();
+}
+
+void MainWindow::on_open()
+{
+    Gtk::FileChooserDialog dialog(*this, "Open archive", Gtk::FILE_CHOOSER_ACTION_OPEN);
+    dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    dialog.add_button("_Open", Gtk::RESPONSE_OK);
+
+    auto filter = Gtk::FileFilter::create();
+    filter->set_name("FreeArc archives");
+    filter->add_pattern("*.arc");
+    dialog.add_filter(filter);
+    filter = Gtk::FileFilter::create();
+    filter->set_name("All files");
+    filter->add_pattern("*");
+    dialog.add_filter(filter);
+
+    if (dialog.run() == Gtk::RESPONSE_OK) open(dialog.get_filename());
 }
 
 void MainWindow::on_new_archive()
@@ -318,15 +499,14 @@ void MainWindow::on_new_archive()
     if (folder.run() != Gtk::RESPONSE_OK) return;
     const std::string input = folder.get_filename();
 
-    // Compression options.
     Gtk::Dialog options("Compression options", *this, true);
     auto* grid = Gtk::manage(new Gtk::Grid());
-    grid->set_row_spacing(8);
-    grid->set_column_spacing(8);
-    grid->set_margin_top(12);
-    grid->set_margin_bottom(12);
-    grid->set_margin_start(12);
-    grid->set_margin_end(12);
+    grid->set_row_spacing(10);
+    grid->set_column_spacing(10);
+    grid->set_margin_top(16);
+    grid->set_margin_bottom(16);
+    grid->set_margin_start(16);
+    grid->set_margin_end(16);
 
     auto* method_label = Gtk::manage(new Gtk::Label("Method:"));
     method_label->set_halign(Gtk::ALIGN_START);
@@ -363,23 +543,37 @@ void MainWindow::on_new_archive()
         add.progress = p;
         if (!pass.empty()) fa::set_password(pass);
         if (!fa::create_archive(archive, {input}, add, error)) return false;
-        // Show the new archive right away.
         open(archive);
         return true;
     });
 }
 
-void MainWindow::on_test()
+void MainWindow::on_add_folder()
 {
     if (archive_path_.empty()) {
         Gtk::MessageDialog dialog(*this, "Open an archive first", false, Gtk::MESSAGE_INFO);
         dialog.run();
         return;
     }
-    run_operation("Test archive", [this](const fa::ProgressFn& progress, std::string& error) {
-        bool cancelled = false;
-        return fa::test_archive(archive_path_, progress, cancelled, error);
-    });
+
+    Gtk::FileChooserDialog folder(*this, "Folder to add or update", Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    folder.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    folder.add_button("_Add", Gtk::RESPONSE_OK);
+    if (folder.run() != Gtk::RESPONSE_OK) return;
+    const std::string input = folder.get_filename();
+
+    run_operation("Update archive",
+                  [this, input](const fa::ProgressFn& progress, std::string& error) {
+                      fa::AddOptions add;
+                      add.method = "lzma";
+                      add.progress = progress;
+                      if (!fa::update_archive(archive_path_, {input}, fa::UpdateMode::Update, add,
+                                              error)) {
+                          return false;
+                      }
+                      open(archive_path_);
+                      return true;
+                  });
 }
 
 void MainWindow::on_extract()
@@ -393,19 +587,19 @@ void MainWindow::on_extract()
     // Selected entries (if any) become include masks.
     std::vector<std::string> masks;
     for (const auto& path : view_.get_selection()->get_selected_rows()) {
-        auto row = *model_->get_iter(path);
+        auto row = *filter_->get_iter(path);
         const std::string name = row[columns_.name];
         if (!name.empty() && name.back() != '/') masks.push_back(name);
     }
 
     Gtk::Dialog dialog("Extract", *this, true);
     auto* grid = Gtk::manage(new Gtk::Grid());
-    grid->set_row_spacing(8);
-    grid->set_column_spacing(8);
-    grid->set_margin_top(12);
-    grid->set_margin_bottom(12);
-    grid->set_margin_start(12);
-    grid->set_margin_end(12);
+    grid->set_row_spacing(10);
+    grid->set_column_spacing(10);
+    grid->set_margin_top(16);
+    grid->set_margin_bottom(16);
+    grid->set_margin_start(16);
+    grid->set_margin_end(16);
 
     auto* folder_label = Gtk::manage(new Gtk::Label("Destination:"));
     folder_label->set_halign(Gtk::ALIGN_START);
@@ -423,6 +617,7 @@ void MainWindow::on_extract()
     auto* selected_label = Gtk::manage(new Gtk::Label(
         masks.empty() ? "Files: all" : "Files: " + std::to_string(masks.size()) + " selected"));
     selected_label->set_halign(Gtk::ALIGN_START);
+    selected_label->get_style_context()->add_class("dim-label");
 
     grid->attach(*folder_label, 0, 0, 1, 1);
     grid->attach(*folder, 1, 0, 1, 1);
@@ -451,80 +646,17 @@ void MainWindow::on_extract()
                   });
 }
 
-void MainWindow::on_add_folder()
+void MainWindow::on_test()
 {
     if (archive_path_.empty()) {
         Gtk::MessageDialog dialog(*this, "Open an archive first", false, Gtk::MESSAGE_INFO);
         dialog.run();
         return;
     }
-
-    Gtk::FileChooserDialog folder(*this, "Folder to add or update", Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
-    folder.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
-    folder.add_button("_Add", Gtk::RESPONSE_OK);
-    if (folder.run() != Gtk::RESPONSE_OK) return;
-    const std::string input = folder.get_filename();
-
-    run_operation("Update archive", [this, input](const fa::ProgressFn& progress,
-                                                 std::string& error) {
-        fa::AddOptions add;
-        add.method = "lzma";
-        add.progress = progress;
-        if (!fa::update_archive(archive_path_, {input}, fa::UpdateMode::Update, add, error)) {
-            return false;
-        }
-        open(archive_path_);  // refresh the listing
-        return true;
+    run_operation("Test archive", [this](const fa::ProgressFn& progress, std::string& error) {
+        bool cancelled = false;
+        return fa::test_archive(archive_path_, progress, cancelled, error);
     });
-}
-
-void MainWindow::open(const std::string& path)
-{
-    auto loaded = std::make_unique<fa::Archive>();
-    std::string error;
-    if (!fa::Archive::open(path, *loaded, error)) {
-        Gtk::MessageDialog dialog(*this, error, false, Gtk::MESSAGE_ERROR);
-        dialog.run();
-        return;
-    }
-
-    archive_ = std::move(loaded);
-    archive_path_ = path;
-    model_->clear();
-
-    for (const auto& entry : archive_->info().files) {
-        auto row = *model_->append();
-        row[columns_.name] = entry.is_dir ? entry.name + "/" : entry.name;
-        row[columns_.size] = entry.is_dir ? "-" : format_size(entry.size);
-        row[columns_.date] = format_date(entry.mtime);
-        row[columns_.directory] = entry.is_dir;
-    }
-
-    set_title("FreeArc-ex — " + std::filesystem::path(path).filename().string());
-    refresh_status();
-}
-
-void MainWindow::on_open()
-{
-    Gtk::FileChooserDialog dialog(*this, "Open archive", Gtk::FILE_CHOOSER_ACTION_OPEN);
-    dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
-    dialog.add_button("_Open", Gtk::RESPONSE_OK);
-
-    auto filter = Gtk::FileFilter::create();
-    filter->set_name("FreeArc archives");
-    filter->add_pattern("*.arc");
-    dialog.add_filter(filter);
-    filter = Gtk::FileFilter::create();
-    filter->set_name("All files");
-    filter->add_pattern("*");
-    dialog.add_filter(filter);
-
-    if (dialog.run() == Gtk::RESPONSE_OK) open(dialog.get_filename());
-}
-
-void MainWindow::on_quit()
-{
-    close();
 }
 
 void MainWindow::on_about()
@@ -538,15 +670,17 @@ void MainWindow::on_about()
     dialog.run();
 }
 
+void MainWindow::on_quit()
+{
+    close();
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
-    // The command line is handled here (a path opens it directly); passing argv
-    // to Gtk::Application would make GIO try to open it as a document.
     auto app = Gtk::Application::create("org.freearc.ex");
     MainWindow window;
-    // A path on the command line opens directly (handy for file managers).
     if (argc > 1) window.open(argv[1]);
     return app->run(window);
 }
