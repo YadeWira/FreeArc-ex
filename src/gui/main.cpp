@@ -38,6 +38,22 @@ public:
     Gtk::TreeModelColumn<std::string> name;
 };
 
+class DiskColumns : public Gtk::TreeModel::ColumnRecord {
+public:
+    DiskColumns()
+    {
+        add(icon);
+        add(directory);
+        add(name);
+        add(path);
+    }
+
+    Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> icon;
+    Gtk::TreeModelColumn<bool> directory;
+    Gtk::TreeModelColumn<std::string> name;
+    Gtk::TreeModelColumn<std::string> path;
+};
+
 std::string format_size(std::uint64_t bytes)
 {
     if (bytes >= 1024ull * 1024 * 1024) {
@@ -95,6 +111,9 @@ private:
     void set_details(const Glib::ustring& name, const Glib::ustring& size,
                      const Glib::ustring& date);
     void clear_details();
+    void refresh_disk();
+    void navigate_disk(const std::string& dir);
+    void add_paths(const std::vector<std::string>& paths);
 
     void run_operation(const std::string& title,
                        const std::function<bool(const fa::ProgressFn&, std::string&)>& operation);
@@ -121,6 +140,18 @@ private:
     Gtk::Label details_title_;
     Gtk::Label details_size_;
     Gtk::Label details_date_;
+
+    // Disk pane (left): browse a folder; drag a selection onto the archive to
+    // add it.
+    Gtk::Box disk_box_{Gtk::ORIENTATION_VERTICAL};
+    Gtk::Box disk_toolbar_{Gtk::ORIENTATION_HORIZONTAL};
+    Gtk::Button disk_up_{"Up"};
+    Gtk::Entry disk_path_;
+    Gtk::ScrolledWindow disk_scroll_;
+    Gtk::TreeView disk_view_;
+    DiskColumns disk_columns_;
+    Glib::RefPtr<Gtk::ListStore> disk_model_;
+    std::string disk_dir_;
 
     Gtk::Statusbar status_;
 
@@ -285,9 +316,78 @@ void MainWindow::build_ui()
     details_.pack_start(*card, Gtk::PACK_SHRINK);
     details_.pack_start(*Gtk::manage(new Gtk::Label()), Gtk::PACK_EXPAND_WIDGET);
 
-    paned_.pack1(scroll_, true, true);
-    paned_.pack2(details_, false, false);
-    paned_.set_position(680);
+    // Disk pane: browse a folder and drag it onto the archive.
+    disk_toolbar_.set_spacing(6);
+    disk_toolbar_.set_margin_top(4);
+    disk_toolbar_.set_margin_start(6);
+    disk_toolbar_.set_margin_end(6);
+    disk_path_.set_hexpand(true);
+    disk_path_.set_placeholder_text("Folder to browse");
+    disk_toolbar_.pack_start(disk_up_, Gtk::PACK_SHRINK);
+    disk_toolbar_.pack_start(disk_path_, Gtk::PACK_EXPAND_WIDGET);
+
+    disk_model_ = Gtk::ListStore::create(disk_columns_);
+    disk_view_.set_model(disk_model_);
+    disk_view_.set_headers_visible(false);
+    disk_view_.append_column("", disk_columns_.icon);
+    disk_view_.append_column("Name", disk_columns_.name);
+    disk_view_.get_column(0)->set_fixed_width(30);
+    disk_view_.get_column(1)->set_expand(true);
+    disk_view_.get_selection()->set_mode(Gtk::SELECTION_MULTIPLE);
+    disk_view_.signal_row_activated().connect([this](const Gtk::TreeModel::Path& path,
+                                                     Gtk::TreeViewColumn*) {
+        auto row = *disk_model_->get_iter(path);
+        if (!row[disk_columns_.directory]) return;
+        navigate_disk(row[disk_columns_.path]);
+    });
+    disk_view_.enable_model_drag_source();
+    std::vector<Gtk::TargetEntry> targets;
+    targets.push_back(Gtk::TargetEntry("text/uri-list"));
+    disk_view_.drag_source_set(targets, Gdk::MODIFIER_MASK, Gdk::ACTION_COPY);
+    disk_view_.signal_drag_data_get().connect(
+        [this](const Glib::RefPtr<Gdk::DragContext>&, Gtk::SelectionData& data, guint, guint) {
+            std::string uris;
+            for (const auto& path : disk_view_.get_selection()->get_selected_rows()) {
+                auto row = *disk_model_->get_iter(path);
+                if (!uris.empty()) uris += "\r\n";
+                uris += Glib::filename_to_uri(row[disk_columns_.path]);
+            }
+            data.set_uris(std::vector<Glib::ustring>{uris});
+        });
+    disk_up_.signal_clicked().connect([this]() {
+        navigate_disk(std::filesystem::path(disk_dir_).parent_path().string());
+    });
+    disk_path_.signal_activate().connect([this]() { navigate_disk(disk_path_.get_text()); });
+
+    disk_scroll_.add(disk_view_);
+    disk_scroll_.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    disk_scroll_.set_vexpand(true);
+    disk_box_.pack_start(disk_toolbar_, Gtk::PACK_SHRINK);
+    disk_box_.pack_start(disk_scroll_, Gtk::PACK_EXPAND_WIDGET);
+
+    paned_.pack1(disk_box_, true, true);
+    paned_.pack2(scroll_, true, true);
+    paned_.set_position(320);
+
+    // Dropping files/folders on the archive pane adds them to the open archive.
+    view_.drag_dest_set(targets, Gtk::DEST_DEFAULT_ALL, Gdk::ACTION_COPY);
+    view_.signal_drag_data_received().connect(
+        [this](const Glib::RefPtr<Gdk::DragContext>& context, int, int,
+               const Gtk::SelectionData& data, guint, guint time) {
+            std::vector<std::string> paths;
+            for (const auto& uri : data.get_uris()) {
+                const std::string path = Glib::filename_from_uri(uri);
+                if (!path.empty()) paths.push_back(path);
+            }
+            if (paths.empty() || archive_path_.empty()) {
+                context->drag_finish(false, false, time);
+                return;
+            }
+            add_paths(paths);
+            context->drag_finish(true, false, time);
+        });
+
+    navigate_disk(Glib::get_current_dir());
 
     box_.pack_start(search_, Gtk::PACK_SHRINK);
     box_.pack_start(paned_, Gtk::PACK_EXPAND_WIDGET);
@@ -296,6 +396,64 @@ void MainWindow::build_ui()
 
     clear_details();
     show_all_children();
+}
+
+void MainWindow::navigate_disk(const std::string& dir)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) return;
+    disk_dir_ = std::filesystem::absolute(dir).lexically_normal().string();
+    disk_path_.set_text(disk_dir_);
+
+    disk_model_->clear();
+    std::vector<std::filesystem::directory_entry> entries;
+    for (const auto& entry : std::filesystem::directory_iterator(disk_dir_, ec)) {
+        entries.push_back(entry);
+    }
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        const bool a_dir = a.is_directory();
+        const bool b_dir = b.is_directory();
+        if (a_dir != b_dir) return a_dir;
+        return a.path().filename().string() < b.path().filename().string();
+    });
+    for (const auto& entry : entries) {
+        auto row = *disk_model_->append();
+        const bool is_dir = entry.is_directory(ec);
+        row[disk_columns_.name] = entry.path().filename().string();
+        row[disk_columns_.directory] = is_dir;
+        row[disk_columns_.path] = entry.path().string();
+        row[disk_columns_.icon] =
+            Gtk::IconTheme::get_default()->load_icon(is_dir ? "folder" : "text-x-generic", 16);
+    }
+}
+
+void MainWindow::refresh_disk()
+{
+    if (!disk_dir_.empty()) navigate_disk(disk_dir_);
+}
+
+void MainWindow::add_paths(const std::vector<std::string>& paths)
+{
+    if (archive_path_.empty()) {
+        Gtk::MessageDialog dialog(*this, "Open or create an archive first", false,
+                                  Gtk::MESSAGE_INFO);
+        dialog.run();
+        return;
+    }
+    run_operation("Add to archive",
+                  [this, paths](const fa::ProgressFn& progress, std::string& error) {
+                      fa::AddOptions add;
+                      add.method = "lzma";
+                      add.progress = progress;
+                      std::vector<std::filesystem::path> inputs;
+                      for (const auto& path : paths) inputs.emplace_back(path);
+                      if (!fa::update_archive(archive_path_, inputs, fa::UpdateMode::Update, add,
+                                              error)) {
+                          return false;
+                      }
+                      open(archive_path_);
+                      return true;
+                  });
 }
 
 void MainWindow::set_details(const Glib::ustring& name, const Glib::ustring& size,
