@@ -116,7 +116,8 @@ constexpr const char* kCompatibleWith = "FreeArc 0.67.1";
 
 void print_version()
 {
-    std::printf("%s %s (compatible with %s)\n", kProgram, kVersion, kCompatibleWith);
+    std::printf("%s %s (compatible with %s) — pre-release\n", kProgram, kVersion,
+                kCompatibleWith);
 }
 
 void print_usage(std::FILE* out)

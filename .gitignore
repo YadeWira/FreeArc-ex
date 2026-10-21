@@ -10,3 +10,6 @@ compile_commands.json
 *.log
 tests/corpus/data/
 .cache/
+
+packaging/windows/stage/
+packaging/windows/output/

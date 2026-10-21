@@ -49,3 +49,28 @@ tested on 5.2.3, 5.2.3.e7 (ResTools build), 5.2.4, 5.3.2 beta and
 - Whether to keep the `unarc.dll` progress integration or use a plain file-based
   install with Inno's own compression (the DLL path exists to reuse `.arc`
   payloads; it is required only if we ship `.arc` data).
+
+## Building the pre-release installer (2026-10-21)
+
+The 0.1.0-pre installer was built and verified with Inno Setup 7.1.0:
+
+```sh
+# 1. stage the Windows files (cross build + docs)
+scripts/package-windows.sh x64
+
+# 2. compile the installer with ISCC (Inno Setup 7.1.0)
+cd packaging/windows
+wine "/path/to/Inno Setup 7/ISCC.exe" freearc-ex.iss
+# -> output/FreeArc-ex-0.1.0-pre-setup.exe
+```
+
+On this machine ISCC runs under wine (a dedicated `WINEPREFIX`), which is also how
+the installer was smoke-tested: silent install with `/VERYSILENT`, then the
+installed `arc-ex.exe --version` responds. The Windows VM route (`vm claim
+win10`) was not needed; it remains the reference for testing on real Windows.
+
+Contents of this build: the console archiver (`arc-ex.exe`), `arc.groups`,
+README, LICENSE and `PRERELEASE.txt`. The GTK3 GUI is **not** included yet: there
+is no Windows build of it (it needs MSYS2 with gtkmm, see the plan). The `.iss`
+already includes `freearc-ex.exe` with `skipifsourcedoesntexist`, so dropping the
+GUI binary into `stage/` is enough to ship it.
