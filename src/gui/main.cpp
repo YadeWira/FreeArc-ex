@@ -13,6 +13,7 @@
 #include "fa/arc.h"
 #include "fa/ops.h"
 #include "fa/arc_writer.h"
+#include "fa/update.h"
 #include "fa/crypto.h"
 
 namespace {
@@ -69,6 +70,7 @@ private:
     void on_test();
     void on_extract();
     void on_new_archive();
+    void on_add_folder();
     void refresh_status();
 
     // Runs an archive operation in a worker thread with a progress dialog.
@@ -151,6 +153,24 @@ MainWindow::MainWindow()
     help_item->set_submenu(*help_menu);
     menu_.append(*help_item);
 
+    // Toolbar.
+    auto* toolbar = Gtk::manage(new Gtk::Toolbar());
+    toolbar->set_toolbar_style(Gtk::ToolbarStyle::TOOLBAR_TEXT);
+    {
+        auto add_button = [&](const char* label, void (MainWindow::*handler)()) {
+            auto* item = Gtk::manage(new Gtk::ToolButton(label));
+            item->signal_clicked().connect(sigc::mem_fun(*this, handler));
+            toolbar->append(*item);
+        };
+        add_button("New", &MainWindow::on_new_archive);
+        add_button("Open", &MainWindow::on_open);
+        add_button("Add...", &MainWindow::on_add_folder);
+        add_button("Extract...", &MainWindow::on_extract);
+        add_button("Test", &MainWindow::on_test);
+        toolbar->append(*Gtk::manage(new Gtk::SeparatorToolItem()));
+        add_button("Quit", &MainWindow::on_quit);
+    }
+
     // Listing.
     model_ = Gtk::ListStore::create(columns_);
     view_.set_model(model_);
@@ -159,11 +179,22 @@ MainWindow::MainWindow()
     view_.append_column("Date", columns_.date);
     view_.set_headers_visible(true);
 
+    // Sortable columns and multiple selection.
+    view_.get_column(0)->set_sort_column(columns_.name);
+    view_.get_column(1)->set_sort_column(columns_.size);
+    view_.get_column(2)->set_sort_column(columns_.date);
+    view_.get_selection()->set_mode(Gtk::SELECTION_MULTIPLE);
+    // Double click extracts the selection (or the whole archive).
+    view_.signal_row_activated().connect([this](const Gtk::TreeModel::Path&, Gtk::TreeViewColumn*) {
+        on_extract();
+    });
+
     scroll_.add(view_);
     scroll_.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     scroll_.set_vexpand(true);
 
     box_.pack_start(menu_, Gtk::PACK_SHRINK);
+    box_.pack_start(*toolbar, Gtk::PACK_SHRINK);
     box_.pack_start(scroll_, Gtk::PACK_EXPAND_WIDGET);
     box_.pack_end(status_, Gtk::PACK_SHRINK);
     add(box_);
@@ -358,20 +389,93 @@ void MainWindow::on_extract()
         dialog.run();
         return;
     }
-    Gtk::FileChooserDialog dialog(*this, "Extract to folder", Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+
+    // Selected entries (if any) become include masks.
+    std::vector<std::string> masks;
+    for (const auto& path : view_.get_selection()->get_selected_rows()) {
+        auto row = *model_->get_iter(path);
+        const std::string name = row[columns_.name];
+        if (!name.empty() && name.back() != '/') masks.push_back(name);
+    }
+
+    Gtk::Dialog dialog("Extract", *this, true);
+    auto* grid = Gtk::manage(new Gtk::Grid());
+    grid->set_row_spacing(8);
+    grid->set_column_spacing(8);
+    grid->set_margin_top(12);
+    grid->set_margin_bottom(12);
+    grid->set_margin_start(12);
+    grid->set_margin_end(12);
+
+    auto* folder_label = Gtk::manage(new Gtk::Label("Destination:"));
+    folder_label->set_halign(Gtk::ALIGN_START);
+    auto* folder = Gtk::manage(new Gtk::FileChooserButton("Choose a folder",
+                                                          Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER));
+    folder->set_current_folder(Glib::get_current_dir());
+
+    auto* policy_label = Gtk::manage(new Gtk::Label("If a file exists:"));
+    policy_label->set_halign(Gtk::ALIGN_START);
+    auto* policy = Gtk::manage(new Gtk::ComboBoxText());
+    policy->append("overwrite");
+    policy->append("keep existing");
+    policy->set_active(0);
+
+    auto* selected_label = Gtk::manage(new Gtk::Label(
+        masks.empty() ? "Files: all" : "Files: " + std::to_string(masks.size()) + " selected"));
+    selected_label->set_halign(Gtk::ALIGN_START);
+
+    grid->attach(*folder_label, 0, 0, 1, 1);
+    grid->attach(*folder, 1, 0, 1, 1);
+    grid->attach(*policy_label, 0, 1, 1, 1);
+    grid->attach(*policy, 1, 1, 1, 1);
+    grid->attach(*selected_label, 0, 2, 2, 1);
+    dialog.get_content_area()->add(*grid);
     dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
-    dialog.add_button("_Select", Gtk::RESPONSE_OK);
+    dialog.add_button("_Extract", Gtk::RESPONSE_OK);
+    dialog.show_all();
     if (dialog.run() != Gtk::RESPONSE_OK) return;
-    const std::string destination = dialog.get_filename();
+
+    const std::string destination = folder->get_filename();
+    const bool overwrite = policy->get_active_row_number() == 0;
 
     run_operation("Extract archive",
-                  [this, destination](const fa::ProgressFn& progress, std::string& error) {
+                  [this, destination, masks, overwrite](const fa::ProgressFn& progress,
+                                                        std::string& error) {
                       bool cancelled = false;
                       fa::ExtractOptions options;
                       options.output_dir = destination;
-                      options.overwrite = true;
-                      return fa::extract_archive(archive_path_, options, progress, cancelled, error);
+                      options.masks = masks;
+                      options.overwrite = overwrite;
+                      return fa::extract_archive(archive_path_, options, progress, cancelled,
+                                                 error);
                   });
+}
+
+void MainWindow::on_add_folder()
+{
+    if (archive_path_.empty()) {
+        Gtk::MessageDialog dialog(*this, "Open an archive first", false, Gtk::MESSAGE_INFO);
+        dialog.run();
+        return;
+    }
+
+    Gtk::FileChooserDialog folder(*this, "Folder to add or update", Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    folder.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    folder.add_button("_Add", Gtk::RESPONSE_OK);
+    if (folder.run() != Gtk::RESPONSE_OK) return;
+    const std::string input = folder.get_filename();
+
+    run_operation("Update archive", [this, input](const fa::ProgressFn& progress,
+                                                 std::string& error) {
+        fa::AddOptions add;
+        add.method = "lzma";
+        add.progress = progress;
+        if (!fa::update_archive(archive_path_, {input}, fa::UpdateMode::Update, add, error)) {
+            return false;
+        }
+        open(archive_path_);  // refresh the listing
+        return true;
+    });
 }
 
 void MainWindow::open(const std::string& path)
