@@ -37,6 +37,8 @@ struct AddOptions {
     const FileClasses* classes = nullptr;   // file classification (arc.groups)
     std::vector<SolidRule> solid{SolidRule{}};  // default: one block per method
     bool header_encryption = false;             // -hp: also encrypt the header and directory
+    int path_mode = 0;                           // -ep: 0 full path, 9 basename, N strip N dirs
+    int detect_level = 1;                        // -ma: 0 name only, 1+ content fallback
     std::string archive_prefix;                  // -ap: base directory inside the archive
     std::string encryption_algorithm = "aes";    // -ae
     std::string directory_method;                // -dm: compressor for the directory block

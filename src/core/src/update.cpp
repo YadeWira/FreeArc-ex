@@ -42,6 +42,22 @@ bool read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& dat
     return true;
 }
 
+std::string apply_path_mode(const std::string& name, int mode)
+{
+    if (mode <= 0) return name;
+    if (mode >= 9) {
+        const std::size_t slash = name.find_last_of('/');
+        return slash == std::string::npos ? name : name.substr(slash + 1);
+    }
+    std::string out = name;
+    for (int i = 0; i < mode; ++i) {
+        const std::size_t slash = out.find('/');
+        if (slash == std::string::npos) break;
+        out.erase(0, slash + 1);
+    }
+    return out.empty() ? name : out;
+}
+
 std::string normalize_name(const std::filesystem::path& path)
 {
     std::string text = path.generic_string();
@@ -86,7 +102,7 @@ struct DiskEntry {
 };
 
 bool walk_path(const std::filesystem::path& disk_path, const std::string& name,
-               std::vector<DiskEntry>& out, std::string& error)
+               std::vector<DiskEntry>& out, std::string& error, int path_mode)
 {
     std::error_code ec;
     const auto status = std::filesystem::status(disk_path, ec);
@@ -96,7 +112,7 @@ bool walk_path(const std::filesystem::path& disk_path, const std::string& name,
     }
 
     DiskEntry entry;
-    entry.name = name;
+    entry.name = apply_path_mode(name, path_mode);
     entry.mtime = to_unix_time(std::filesystem::last_write_time(disk_path, ec));
 
     if (std::filesystem::is_directory(status)) {
@@ -112,7 +128,8 @@ bool walk_path(const std::filesystem::path& disk_path, const std::string& name,
         }
         std::sort(children.begin(), children.end());
         for (const auto& child : children) {
-            if (!walk_path(child, name + "/" + child.filename().generic_string(), out, error)) {
+            if (!walk_path(child, name + "/" + child.filename().generic_string(), out, error,
+                           path_mode)) {
                 return false;
             }
         }
@@ -213,7 +230,7 @@ bool update_archive(const std::filesystem::path& archive,
             error = "invalid input path '" + input.string() + "'";
             return false;
         }
-        if (!walk_path(input, name, disk, error)) return false;
+        if (!walk_path(input, name, disk, error, options.path_mode)) return false;
     }
     std::map<std::string, const DiskEntry*> disk_by_name;
     for (const auto& entry : disk) disk_by_name[entry.name] = &entry;

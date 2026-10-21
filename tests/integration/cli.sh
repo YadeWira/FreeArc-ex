@@ -64,4 +64,20 @@ test -f out_ad/prefixed/base/src/a.txt || { echo "FAIL: -ad extraction path"; ex
 "$arc_ex" lt bf.arc | grep -q 'blowfish-448' || { echo "FAIL: -ae ignored"; exit 1; }
 "$arc_ex" t bf.arc -pclave >/dev/null
 
+# -ep9: store only the base names.
+mkdir -p src/sub
+printf 'hola\n' > src/sub/notas.dat
+"$arc_ex" a e9.arc src -mlzma -ep9 >/dev/null
+"$arc_ex" lb e9.arc | tr -d '\r' | grep -qx 'notas.dat' || { echo "FAIL: -ep9"; exit 1; }
+
+# -ma: without a name match, a text file is classified as text; -ma- disables it.
+"$arc_ex" a ma.arc src -m4 >/dev/null
+"$arc_ex" lt ma.arc | grep '^  pos=' | grep -q 'ppmd' || {
+    echo "FAIL: -ma did not detect the text file"; exit 1; }
+"$arc_ex" a ma0.arc src -m4 -ma- >/dev/null
+if "$arc_ex" lt ma0.arc | grep '^  pos=' | grep -q 'ppmd'; then
+    echo "FAIL: -ma- still applied content detection"
+    exit 1
+fi
+
 echo "cli OK"

@@ -51,6 +51,24 @@ std::string normalize_name(const std::filesystem::path& path)
     return text;
 }
 
+// -ep: 0 keeps the path, 9 (or "--") keeps only the base name, N strips N
+// leading components.
+std::string apply_path_mode(const std::string& name, int mode)
+{
+    if (mode <= 0) return name;
+    if (mode >= 9) {
+        const std::size_t slash = name.find_last_of('/');
+        return slash == std::string::npos ? name : name.substr(slash + 1);
+    }
+    std::string out = name;
+    for (int i = 0; i < mode; ++i) {
+        const std::size_t slash = out.find('/');
+        if (slash == std::string::npos) break;
+        out.erase(0, slash + 1);
+    }
+    return out.empty() ? name : out;
+}
+
 bool read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error)
 {
     std::ifstream in(path, std::ios::binary);
@@ -74,7 +92,7 @@ bool read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& dat
 }
 
 bool add_path(const std::filesystem::path& disk_path, const std::string& name,
-              std::vector<Entry>& entries, std::string& error)
+              std::vector<Entry>& entries, std::string& error, int path_mode)
 {
     std::error_code ec;
     const auto status = std::filesystem::status(disk_path, ec);
@@ -84,7 +102,7 @@ bool add_path(const std::filesystem::path& disk_path, const std::string& name,
     }
 
     Entry entry;
-    entry.name = name;
+    entry.name = apply_path_mode(name, path_mode);
     const std::size_t slash = name.rfind('/');
     entry.base = (slash == std::string::npos) ? name : name.substr(slash + 1);
     entry.dir = (slash == std::string::npos) ? "" : name.substr(0, slash);
@@ -104,7 +122,8 @@ bool add_path(const std::filesystem::path& disk_path, const std::string& name,
         }
         std::sort(children.begin(), children.end());
         for (const auto& child : children) {
-            if (!add_path(child, name + "/" + child.filename().generic_string(), entries, error)) {
+            if (!add_path(child, name + "/" + child.filename().generic_string(), entries, error,
+                          path_mode)) {
                 return false;
             }
         }
@@ -311,7 +330,7 @@ bool create_archive(const std::filesystem::path& archive,
             error = "invalid input path '" + input.string() + "'";
             return false;
         }
-        if (!add_path(input, name, entries, error)) return false;
+        if (!add_path(input, name, entries, error, options.path_mode)) return false;
     }
     if (entries.empty()) {
         error = "nothing to add";
@@ -360,8 +379,21 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
             method_of[i] = "storing";
             continue;
         }
-        const std::string cls =
+        std::string cls =
             options.classes != nullptr ? options.classes->classify(entries[i].name) : "$obj";
+        if (cls == "$obj" && options.detect_level > 0 && !entries[i].data.empty()) {
+            // -ma: without a name match, look at the first block of the file;
+            // printable bytes with no NUL are treated as text.
+            const std::size_t sample = std::min<std::size_t>(entries[i].data.size(), 8192);
+            std::size_t printable = 0;
+            bool has_nul = false;
+            for (std::size_t k = 0; k < sample; ++k) {
+                const unsigned char c = entries[i].data[k];
+                if (c == 0) has_nul = true;
+                if (c == 9 || c == 10 || c == 13 || (c >= 32 && c < 127) || c >= 128) ++printable;
+            }
+            if (!has_nul && printable * 100 >= sample * 95) cls = "$text";
+        }
         if (options.table != nullptr) {
             method_of[i] = options.table->resolve(options.method, cls);
         } else {

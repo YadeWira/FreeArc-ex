@@ -419,11 +419,17 @@ static int run(int argc, char** argv)
         bool method_given = false;
         for (int i = 2; i < argc; ++i) {
             const std::string_view arg(argv[i]);
-            if (arg.rfind("-m", 0) == 0 && arg.size() > 2) {
+            if (arg.rfind("-ma", 0) == 0 && arg != "-max") {
+                const std::string level = std::string(arg.substr(3));
+                options.detect_level = (level == "-") ? 0 : std::atoi(level.c_str());
+            } else if (arg.rfind("-m", 0) == 0 && arg.size() > 2) {
                 options.method = std::string(arg.substr(2));
                 method_given = true;
             } else if (arg.rfind("-dm", 0) == 0) {
                 options.directory_method = std::string(arg.substr(3));
+            } else if (arg.rfind("-ep", 0) == 0) {
+                const std::string mode = std::string(arg.substr(3));
+                options.path_mode = (mode == "--" ) ? 9 : std::atoi(mode.c_str());
             } else if (arg.rfind("-ae", 0) == 0) {
                 options.encryption_algorithm = std::string(arg.substr(3));
             } else if (arg.rfind("-ap", 0) == 0) {
