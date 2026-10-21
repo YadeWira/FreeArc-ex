@@ -12,6 +12,7 @@
 | Explorer | COM context menu (x86 and x64) and file associations, Windows only |
 | Containers | reading `.7z`/`.zip`/`.rar` (writing `.zip` if agreed) |
 | Platforms | Linux x86_64/i686/aarch64; Windows x86_64/i686 with Windows 7 SP1 as the minimum |
+| GUI | GTK3 via gtkmm 3.24, optional build (`FA_BUILD_GUI`); first slice lists archives |
 
 ## How it is verified: the oracle
 

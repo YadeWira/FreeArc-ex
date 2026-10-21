@@ -36,6 +36,8 @@ runs `arc.*.lua` event hooks (Lua 5.1). The GTK3 GUI follows; see
 - Updated codecs: modern LZMA SDK, LZ4 1.10, LibTomCrypt 1.18.2, and no
   x86-specific assembly.
 
+![FreeArc-ex GUI (first slice)](docs/images/gui-m5.png)
+
 ## Building
 
 ```sh
@@ -48,6 +50,14 @@ Full matrix (all five targets):
 
 ```sh
 scripts/build-matrix.sh
+```
+
+GUI (needs `libgtkmm-3.0-dev`, native builds only):
+
+```sh
+cmake -S . -B build/gui -DCMAKE_BUILD_TYPE=Release -DFA_BUILD_GUI=ON
+cmake --build build/gui -j
+./build/gui/src/gui/freearc-ex archive.arc
 ```
 
 Dependencies and cross-verification details are in [`docs/BUILD.md`](docs/BUILD.md).

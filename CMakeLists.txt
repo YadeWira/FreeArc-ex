@@ -40,6 +40,10 @@ if(FA_BUILD_CLI)
     add_subdirectory(src/cli)
 endif()
 
+if(FA_BUILD_GUI)
+    add_subdirectory(src/gui)
+endif()
+
 if(FA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
