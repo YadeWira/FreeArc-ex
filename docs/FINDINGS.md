@@ -136,6 +136,15 @@ contents. Its comparison is time-based with coarse granularity. We compare size
 differential test sets explicit mtimes so both detect the change and then the
 block layouts match exactly.
 
+## GUI threading (2026-10-21)
+
+Archive operations run in a `std::thread` and the window polls their shared state
+with `Glib::signal_timeout` (100 ms): progress callback writes atomics and the
+current file under a mutex, the UI reads them, and Cancel sets an atomic that the
+callback checks. It is simpler than a `Glib::Dispatcher` and keeps the core free
+of GTK types (the same `fa::extract_archive`/`fa::test_archive` are used by the
+CLI).
+
 ## Shared development resources
 
 - Oracle binary: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`

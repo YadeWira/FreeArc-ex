@@ -10,6 +10,7 @@ add_library(fa_core STATIC
     src/update.cpp
     src/crypto.cpp
     src/repair.cpp
+    src/ops.cpp
     src/lua.cpp
     src/preset.cpp
 )

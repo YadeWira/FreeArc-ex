@@ -16,6 +16,7 @@
 #include "fa/update.h"
 #include "fa/crypto.h"
 #include "fa/repair.h"
+#include "fa/ops.h"
 #include "fa/lua.h"
 
 namespace {
@@ -568,6 +569,41 @@ static int run(int argc, char** argv)
 
     fa::Archive archive;
     std::string error;
+
+    if (command == "t" || command == "x") {
+        bool cancelled = false;
+        const bool extract = command == "x";
+        bool ok = false;
+        if (extract) {
+            if (add_dir) {
+                // -ad: extract under a directory named after the archive.
+                const std::string stem = std::filesystem::path(archive_path).filename().string();
+                const std::size_t dot = stem.find_last_of('.');
+                output_dir = (std::filesystem::path(output_dir) /
+                              (dot == std::string::npos ? stem : stem.substr(0, dot)))
+                                 .string();
+            }
+            fa::ExtractOptions options;
+            options.output_dir = output_dir;
+            options.masks = masks;
+            options.excludes = excludes;
+            options.overwrite = overwrite;
+            ok = fa::extract_archive(archive_path, options, nullptr, cancelled, error);
+        } else {
+            ok = fa::test_archive(archive_path, nullptr, cancelled, error);
+        }
+        if (!ok) {
+            if (cancelled) {
+                std::fprintf(stderr, "arc-ex: cancelled\n");
+                return kExitFatal;
+            }
+            std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
+            return error.find("password") != std::string::npos ? kExitBadPassword : kExitFatal;
+        }
+        std::printf(extract ? "All OK: extracted into '%s'\n" : "All OK\n", output_dir.c_str());
+        return kExitSuccess;
+    }
+
     if (!fa::Archive::open(archive_path, archive, error)) {
         std::fprintf(stderr, "arc-ex: %s\n", error.c_str());
         return error.find("password") != std::string::npos ? kExitBadPassword : kExitFatal;

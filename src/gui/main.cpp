@@ -2,11 +2,16 @@
 // Milestone M5, first slice: open an .arc, list its contents, extract it.
 #include <gtkmm.h>
 
+#include <atomic>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "fa/arc.h"
+#include "fa/ops.h"
 
 namespace {
 
@@ -59,7 +64,14 @@ private:
     void on_open();
     void on_quit();
     void on_about();
+    void on_test();
+    void on_extract();
     void refresh_status();
+
+    // Runs an archive operation in a worker thread with a progress dialog.
+    // `operation` receives a progress callback and returns true on success.
+    void run_operation(const std::string& title,
+                       const std::function<bool(const fa::ProgressFn&, std::string&)>& operation);
 
     Gtk::Box box_{Gtk::ORIENTATION_VERTICAL};
     Gtk::MenuBar menu_;
@@ -72,6 +84,18 @@ private:
 
     std::unique_ptr<fa::Archive> archive_;
     std::string archive_path_;
+
+    // Shared with the worker thread while an operation runs.
+    struct ProgressState {
+        std::atomic<std::uint64_t> done{0};
+        std::atomic<std::uint64_t> total{0};
+        std::atomic<bool> cancel{false};
+        std::atomic<bool> finished{false};
+        std::atomic<bool> ok{false};
+        std::mutex mutex;
+        std::string current;
+        std::string error;
+    };
 };
 
 MainWindow::MainWindow()
@@ -93,6 +117,21 @@ MainWindow::MainWindow()
     }
     file_item->set_submenu(*file_menu);
     menu_.append(*file_item);
+
+    // Actions menu.
+    auto* actions_item = Gtk::manage(new Gtk::MenuItem("_Actions", true));
+    Gtk::Menu* actions_menu = Gtk::manage(new Gtk::Menu());
+    {
+        auto* test_item = Gtk::manage(new Gtk::MenuItem("_Test archive", true));
+        test_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_test));
+        actions_menu->append(*test_item);
+
+        auto* extract_item = Gtk::manage(new Gtk::MenuItem("_Extract to...", true));
+        extract_item->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_extract));
+        actions_menu->append(*extract_item);
+    }
+    actions_item->set_submenu(*actions_menu);
+    menu_.append(*actions_item);
 
     // Help menu.
     auto* help_item = Gtk::manage(new Gtk::MenuItem("_Help", true));
@@ -142,6 +181,118 @@ void MainWindow::refresh_status()
     }
     status_.push(archive_path_ + " — " + std::to_string(files) + " file(s), " +
                  std::to_string(bytes) + " byte(s)");
+}
+
+void MainWindow::run_operation(
+    const std::string& title, const std::function<bool(const fa::ProgressFn&, std::string&)>& operation)
+{
+    if (archive_path_.empty()) {
+        Gtk::MessageDialog dialog(*this, "Open an archive first", false, Gtk::MESSAGE_INFO);
+        dialog.run();
+        return;
+    }
+
+    auto state = std::make_shared<ProgressState>();
+    auto dialog = std::make_shared<Gtk::Dialog>(title, *this, true);
+    dialog->set_default_size(420, -1);
+    auto* box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 8));
+    box->set_margin_top(12);
+    box->set_margin_bottom(12);
+    box->set_margin_start(12);
+    box->set_margin_end(12);
+    auto* label = Gtk::manage(new Gtk::Label("Working..."));
+    label->set_halign(Gtk::ALIGN_START);
+    auto* bar = Gtk::manage(new Gtk::ProgressBar());
+    bar->set_show_text(true);
+    box->pack_start(*label, Gtk::PACK_SHRINK);
+    box->pack_start(*bar, Gtk::PACK_SHRINK);
+    dialog->get_content_area()->add(*box);
+    dialog->add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    dialog->signal_response().connect([state, dialog](int response) {
+        if (response == Gtk::RESPONSE_CANCEL) state->cancel = true;
+        dialog->hide();
+    });
+    dialog->show_all();
+
+    // Worker thread: runs the core operation and reports progress.
+    std::thread worker([state, operation, this]() {
+        std::string error;
+        const bool ok = operation(
+            [state](std::uint64_t done, std::uint64_t total, const std::string& current) {
+                state->done = done;
+                state->total = total;
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->current = current;
+                return !state->cancel.load();
+            },
+            error);
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->error = error;
+        }
+        state->ok = ok;
+        state->finished = true;
+    });
+
+    // UI polling.
+    auto finished = std::make_shared<bool>(false);
+    Glib::signal_timeout().connect(
+        [state, bar, label, dialog, finished, this]() {
+            const std::uint64_t total = state->total;
+            const std::uint64_t done = state->done;
+            if (total > 0) {
+                bar->set_fraction(static_cast<double>(done) / static_cast<double>(total));
+                bar->set_text(std::to_string(done * 100 / total) + "%");
+            }
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                if (!state->current.empty()) label->set_text(state->current);
+            }
+            if (!state->finished) return true;
+
+            dialog->hide();
+            if (!*finished) {
+                *finished = true;
+                if (!state->ok && !state->cancel) {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    Gtk::MessageDialog message(*this, state->error, false, Gtk::MESSAGE_ERROR);
+                    message.run();
+                }
+                refresh_status();
+            }
+            return false;
+        },
+        100);
+
+    dialog->run();
+    state->cancel = true;
+    worker.join();
+}
+
+void MainWindow::on_test()
+{
+    run_operation("Test archive", [this](const fa::ProgressFn& progress, std::string& error) {
+        bool cancelled = false;
+        return fa::test_archive(archive_path_, progress, cancelled, error);
+    });
+}
+
+void MainWindow::on_extract()
+{
+    Gtk::FileChooserDialog dialog(*this, "Extract to folder", Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+    dialog.add_button("_Select", Gtk::RESPONSE_OK);
+    if (dialog.run() != Gtk::RESPONSE_OK) return;
+    const std::string destination = dialog.get_filename();
+
+    run_operation("Extract archive",
+                  [this, destination](const fa::ProgressFn& progress, std::string& error) {
+                      bool cancelled = false;
+                      fa::ExtractOptions options;
+                      options.output_dir = destination;
+                      options.overwrite = true;
+                      return fa::extract_archive(archive_path_, options, progress, cancelled, error);
+                  });
 }
 
 void MainWindow::open(const std::string& path)
