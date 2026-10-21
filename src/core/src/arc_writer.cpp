@@ -389,29 +389,44 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     };
     std::vector<Block> blocks;
 
-    // Blocks reused from the previous archive: copied verbatim, in their
-    // original order, before anything else.
+    // Blocks reused from the previous archive: copied verbatim. They are placed
+    // where their files are in the new order, so the archive keeps the file
+    // ordering the original had.
     std::map<std::string, std::size_t> index_of_name;
     for (std::size_t i = 0; i < entries.size(); ++i) index_of_name[entries[i].name] = i;
+
+    struct Preserved {
+        std::size_t first = 0;           // first entry index in the new order
+        std::vector<std::size_t> files;  // contiguous entries
+        std::string method;
+        std::vector<std::uint8_t> packed;
+    };
+    std::vector<Preserved> preserved_blocks;
     std::vector<bool> consumed(entries.size(), false);
+    std::map<std::size_t, std::size_t> preserved_at;  // first entry index -> block
 
     for (const auto& old : preserved) {
-        Block block;
-        block.method = old.method;
-        block.packed = old.packed;
-        block.preserved = true;
-        bool complete = true;
-        for (const auto& name : old.files) {
-            const auto it = index_of_name.find(name);
-            if (it == index_of_name.end() || consumed[it->second]) {
-                complete = false;
+        std::vector<std::size_t> files;
+        bool contiguous = true;
+        for (std::size_t k = 0; k < old.files.size(); ++k) {
+            const auto it = index_of_name.find(old.files[k]);
+            if (it == index_of_name.end()) {
+                contiguous = false;
                 break;
             }
-            block.entries.push_back(it->second);
+            if (k > 0 && it->second != files.back() + 1) contiguous = false;
+            if (consumed[it->second]) contiguous = false;
+            files.push_back(it->second);
         }
-        if (!complete) continue;  // cannot reuse: fall back to recompression
-        for (const auto index : block.entries) consumed[index] = true;
-        blocks.push_back(std::move(block));
+        if (!contiguous || files.empty()) continue;
+        for (const auto index : files) consumed[index] = true;
+        Preserved block;
+        block.first = files.front();
+        block.files = std::move(files);
+        block.method = old.method;
+        block.packed = old.packed;
+        preserved_at[block.first] = preserved_blocks.size();
+        preserved_blocks.push_back(std::move(block));
     }
 
     auto add_block = [&](const std::string& method, std::vector<std::size_t> indices) {
@@ -433,21 +448,8 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
     }
     if (!dirs_only.empty()) add_block("storing", std::move(dirs_only));
 
-    // Method groups for the files, in first-seen order.
-    std::vector<std::pair<std::string, std::vector<std::size_t>>> groups;
-    std::map<std::string, std::size_t> group_of;
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].is_dir || consumed[i]) continue;
-        const std::string& method = method_of[i];
-        auto it = group_of.find(method);
-        if (it == group_of.end()) {
-            group_of[method] = groups.size();
-            it = group_of.find(method);
-            groups.emplace_back(method, std::vector<std::size_t>{});
-        }
-        groups[it->second].second.push_back(i);
-    }
-
+    // Walk the files in order: a preserved block is emitted where it belongs,
+    // everything else is grouped by method and split by the -s criteria.
     auto extension_of = [](const std::string& name) {
         const std::size_t dot = name.find_last_of('.');
         const std::size_t slash = name.find_last_of('/');
@@ -491,6 +493,43 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
         return best;
     };
 
+    const std::vector<SolidRule> rules =
+        options.solid.empty() ? std::vector<SolidRule>{SolidRule{}} : options.solid;
+
+    std::size_t i = 0;
+    while (i < entries.size()) {
+        if (entries[i].is_dir) { ++i; continue; }
+
+        const auto preserved_it = preserved_at.find(i);
+        if (preserved_it != preserved_at.end()) {
+            const Preserved& old = preserved_blocks[preserved_it->second];
+            Block block;
+            block.method = old.method;
+            block.packed = old.packed;
+            block.entries = old.files;
+            block.preserved = true;
+            blocks.push_back(std::move(block));
+            i = old.files.back() + 1;
+            continue;
+        }
+
+        // New block: same method, as many files as the criteria allow, but stop
+        // before a preserved block so it can be emitted intact.
+        const std::string method = method_of[i];
+        std::vector<std::size_t> indices;
+        std::size_t j = i;
+        while (j < entries.size() && !entries[j].is_dir && method_of[j] == method &&
+               preserved_at.find(j) == preserved_at.end()) {
+            indices.push_back(j);
+            ++j;
+        }
+        const std::size_t len = chunk_len(rules, indices, 0);
+        std::vector<std::size_t> chunk(indices.begin(),
+                                       indices.begin() + static_cast<std::ptrdiff_t>(len));
+        i += len;
+        add_block(method, std::move(chunk));
+    }
+
     // The directory block always goes first, as in the original.
     for (std::size_t i = 1; i < blocks.size(); ++i) {
         const auto& block = blocks[i];
@@ -501,21 +540,6 @@ static bool write_entries(const std::filesystem::path& archive, std::vector<Entr
             blocks.erase(blocks.begin() + static_cast<std::ptrdiff_t>(i));
             blocks.insert(blocks.begin(), std::move(dir_block));
             break;
-        }
-    }
-
-    const std::vector<SolidRule> rules =
-        options.solid.empty() ? std::vector<SolidRule>{SolidRule{}} : options.solid;
-
-    for (const auto& [method, indices] : groups) {
-        std::size_t start = 0;
-        while (start < indices.size()) {
-            const std::size_t len = chunk_len(rules, indices, start);
-            std::vector<std::size_t> chunk(indices.begin() + static_cast<std::ptrdiff_t>(start),
-                                           indices.begin() +
-                                               static_cast<std::ptrdiff_t>(start + len));
-            start += len;
-            add_block(method, std::move(chunk));
         }
     }
 

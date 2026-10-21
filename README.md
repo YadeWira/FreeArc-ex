@@ -11,7 +11,8 @@ of them, with `arc.exe` 0.67.1 as the oracle in both directions. Presets `-m0`..
 through FreeArc's definition table and `arc.groups` classes, with one solid block
 per resolved method, including the PPMd-based text chains on every target (the
 32-bit heap layout is emulated on 64-bit). `u`, `f` and `d` update archives
-(reusing untouched blocks) and solid-block grouping follows FreeArc's `-s`
+(reusing untouched blocks in place, with the same block structure as the
+original) and solid-block grouping follows FreeArc's `-s`
 grammar. `-p` and `-hp` encrypt archives (AES-256/CTR with PBKDF2, data only or
 data plus headers) in a way `arc.exe` reads, and `-rr` writes a recovery record
 that both `arc.exe` and our own `r` command use to repair damaged sectors. LZ4 is pending its 1.10 update and

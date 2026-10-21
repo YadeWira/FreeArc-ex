@@ -127,6 +127,15 @@ the 1.10 decoder arrives with the library update).
 - A failing handler must not abort the archiver: errors from the Lua call are
   swallowed (as the original does through its event wrapper).
 
+## Update change detection (2026-10-20)
+
+While comparing update layouts against the oracle, a same-second rewrite of a
+file with a different size was **not** detected by `arc.exe`: it kept the old
+contents. Its comparison is time-based with coarse granularity. We compare size
+**or** time, which is stricter (and avoids silently archiving stale data); the
+differential test sets explicit mtimes so both detect the change and then the
+block layouts match exactly.
+
 ## Shared development resources
 
 - Oracle binary: `/mnt/IA_LAB/agentes/PArc/ref/Arc.exe`

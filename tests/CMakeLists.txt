@@ -117,3 +117,9 @@ add_test(NAME cli_features
 
 add_test(NAME lua_events
          COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/lua.sh $<TARGET_FILE:arc-ex>)
+
+if(FA_WINE_SOLID AND EXISTS "${FA_ARC_ORACLE_SOLID}")
+    add_test(NAME update_parity
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/integration/update_parity.sh
+                     $<TARGET_FILE:arc-ex> ${FA_ARC_ORACLE_SOLID} ${FA_WINE_SOLID})
+endif()
