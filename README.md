@@ -18,10 +18,6 @@ docs, with an optional PATH entry and desktop shortcut.
 
 It is beta software: use it on copies of your files.
 
-## Screenshots
-
-![FreeArc-ex GUI](docs/images/gui-m5.png)
-
 ## Targets
 
 | platform | architectures | minimum |
